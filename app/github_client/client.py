@@ -70,9 +70,10 @@ class GitHubClient:
         if branch_name in [b.name for b in repo.branches]:
             repo.git.branch("-D", branch_name)
 
-        # Create and checkout new branch
+        # Create branch, then step back to default so the worktree can check it out.
         repo.git.checkout("-b", branch_name)
-        logger.info(f"Created and checked out branch: {branch_name}")
+        repo.git.checkout(default_branch)
+        logger.info(f"Created branch: {branch_name}")
         return branch_name
 
     def create_worktree(self, ticket_key: str, branch_name: str) -> str:
