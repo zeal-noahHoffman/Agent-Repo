@@ -30,3 +30,6 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Internal handoff notes (never push)
+HANDOFF.md
