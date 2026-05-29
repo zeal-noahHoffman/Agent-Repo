@@ -30,7 +30,7 @@ def handle_mention(event, say):
     match = TICKET_PATTERN.search(text)
     if not match:
         say(
-            text="I need a Jira ticket key to work on. Try: `@Agent PROJ-123`",
+            text="Hello! Let me know what ticket you'd like me to start on (e.g. `@Agent PROJ-123`).",
             thread_ts=thread_ts,
         )
         return
