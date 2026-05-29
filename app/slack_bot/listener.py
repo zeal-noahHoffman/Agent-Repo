@@ -21,6 +21,11 @@ def handle_mention(event, say):
     thread_ts = event.get("ts")
     channel = event.get("channel")
 
+    # Restrict the agent to allowed channel(s), if configured.
+    if Config.SLACK_ALLOWED_CHANNELS and channel not in Config.SLACK_ALLOWED_CHANNELS:
+        logger.info(f"Ignoring mention in non-allowed channel: {channel}")
+        return
+
     # Extract Jira ticket key from the message
     match = TICKET_PATTERN.search(text)
     if not match:

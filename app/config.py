@@ -18,6 +18,12 @@ class Config:
     # Slack
     SLACK_BOT_TOKEN: str = os.environ["SLACK_BOT_TOKEN"]
     SLACK_APP_TOKEN: str = os.environ["SLACK_APP_TOKEN"]
+    # Comma-separated channel IDs the agent will respond in. Empty = all channels.
+    SLACK_ALLOWED_CHANNELS: set[str] = {
+        c.strip()
+        for c in os.getenv("SLACK_ALLOWED_CHANNELS", "").split(",")
+        if c.strip()
+    }
 
     # Jira
     JIRA_URL: str = os.environ["JIRA_URL"]
