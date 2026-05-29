@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /Users/noahhoffman/Desktop -maxdepth 2 \\\\\\( -iname \"*.png\" -o -iname \"*.jpg\" -o -iname \"*.jpeg\" \\\\\\) 2>/dev/null; echo \"---\"; ls -la /Users/noahhoffman/Desktop/Agent-Repo)",
+      "Read(//Users/noahhoffman/Desktop/**)",
+      "WebSearch",
+      "Bash(python3 -m py_compile app/agent/orchestrator.py app/agent/prompts.py app/config.py app/github_client/client.py)"
+    ]
+  }
+}

@@ -1,0 +1,7 @@
+claude-agent-sdk>=0.1.0
+slack-bolt>=1.20.0
+slack-sdk>=3.30.0
+atlassian-python-api>=3.41.0
+gitpython>=3.1.40
+PyGithub>=2.3.0
+python-dotenv>=1.0.0
