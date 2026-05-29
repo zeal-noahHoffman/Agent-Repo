@@ -1,0 +1,16 @@
+.git
+.gitignore
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+.env
+workspace/
+*.log
+logs/
+.vscode/
+.idea/
+.DS_Store
+.claude/
+README.md

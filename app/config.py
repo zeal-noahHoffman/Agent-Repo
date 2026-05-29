@@ -26,7 +26,7 @@ class Config:
 
     # GitHub
     GITHUB_TOKEN: str = os.environ["GITHUB_TOKEN"]
-    GITHUB_REPO: str = os.getenv("GITHUB_REPO", "Zeal-IT-Consultants/JSX-Demo")
+    GITHUB_REPO: str = os.getenv("GITHUB_REPO", "zeal-noahHoffman/Demo-Project")
 
     # Workspace
     WORKSPACE_DIR: str = os.getenv("WORKSPACE_DIR", "/workspace")
