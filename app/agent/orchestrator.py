@@ -57,6 +57,12 @@ class Orchestrator:
             logger.info(f"Phase 1 start: {ticket_key}")
 
             ticket = self.jira.get_ticket(ticket_key)
+
+            # Mark the ticket as picked up.
+            self.jira.transition_ticket(ticket_key, Config.JIRA_STATUS_IN_PROGRESS)
+
+            # Step 2: Prepare workspace (clone/pull) and branch off
+            logger.info("Step 2: Preparing workspace")
             branch_name = self.github.create_branch(ticket_key)
             worktree_path = self.github.create_worktree(ticket_key, branch_name)
 
@@ -150,7 +156,10 @@ class Orchestrator:
                 body=pr_body,
             )
 
-            logger.info(f"Phase 2 complete: {ticket_key} — {pr_url}")
+            # PR is up — move the ticket to review.
+            self.jira.transition_ticket(ticket_key, Config.JIRA_STATUS_IN_REVIEW)
+
+            logger.info(f"Pipeline complete for {ticket_key}")
             return {
                 "success": True,
                 "branch": branch_name,

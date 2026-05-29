@@ -29,6 +29,10 @@ class Config:
     JIRA_URL: str = os.environ["JIRA_URL"]
     JIRA_EMAIL: str = os.environ["JIRA_EMAIL"]
     JIRA_API_TOKEN: str = os.environ["JIRA_API_TOKEN"]
+    # Board status/column names the agent moves tickets to. Must match your
+    # board exactly. Transitions are best-effort — a mismatch is logged, not fatal.
+    JIRA_STATUS_IN_PROGRESS: str = os.getenv("JIRA_STATUS_IN_PROGRESS", "In Progress")
+    JIRA_STATUS_IN_REVIEW: str = os.getenv("JIRA_STATUS_IN_REVIEW", "In Review")
 
     # GitHub
     GITHUB_TOKEN: str = os.environ["GITHUB_TOKEN"]

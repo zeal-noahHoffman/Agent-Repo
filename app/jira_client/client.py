@@ -37,6 +37,56 @@ class JiraClient:
         logger.info(f"Fetched ticket: {ticket_key} - {ticket['summary']}")
         return ticket
 
+    def transition_ticket(self, ticket_key: str, target_status: str) -> bool:
+        """Move a ticket to a status/column by name (e.g. "In Progress").
+
+        Best-effort: matches the target against each available transition's
+        destination status (then its transition name), and logs a warning
+        instead of raising if no matching transition is available — so a board
+        whose columns don't match, or a ticket already in that status, never
+        breaks the pipeline.
+        """
+        try:
+            full = self.client.get_issue_transitions_full(ticket_key)
+            transitions = full.get("transitions", [])
+            target = target_status.strip().lower()
+
+            match = None
+            for t in transitions:
+                to_name = (t.get("to") or {}).get("name", "")
+                if to_name.strip().lower() == target:
+                    match = t
+                    break
+            # Fall back to matching the transition's own name.
+            if match is None:
+                for t in transitions:
+                    if t.get("name", "").strip().lower() == target:
+                        match = t
+                        break
+
+            if match is None:
+                available = ", ".join(
+                    f"{t.get('name')} -> {(t.get('to') or {}).get('name')}"
+                    for t in transitions
+                )
+                logger.warning(
+                    f"No transition to '{target_status}' available for "
+                    f"{ticket_key}. Available: {available or '(none)'}"
+                )
+                return False
+
+            self.client.set_issue_status_by_transition_id(
+                ticket_key, int(match["id"])
+            )
+            logger.info(f"Moved {ticket_key} to '{target_status}'")
+            return True
+
+        except Exception as e:
+            logger.warning(
+                f"Could not transition {ticket_key} to '{target_status}': {e}"
+            )
+            return False
+
     def _extract_description(self, description) -> str:
         """Extract text from Jira's Atlassian Document Format or plain text."""
         if description is None:
