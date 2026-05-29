@@ -75,13 +75,39 @@ class GitHubClient:
         logger.info(f"Created and checked out branch: {branch_name}")
         return branch_name
 
-    def has_changes(self) -> bool:
-        """Return True if the workspace has uncommitted changes (incl. untracked)."""
-        return self.local_repo.is_dirty(untracked_files=True)
-
-    def commit_and_push(self, branch_name: str, commit_message: str) -> str:
-        """Stage all changes, commit, and push to remote."""
+    def create_worktree(self, ticket_key: str, branch_name: str) -> str:
+        """Create an isolated git worktree for the ticket. Returns the worktree path."""
+        worktrees_dir = Config.WORKTREES_DIR
+        worktree_path = os.path.join(worktrees_dir, ticket_key.lower())
         repo = self.local_repo
+
+        os.makedirs(worktrees_dir, exist_ok=True)
+
+        # Remove stale worktree if one already exists for this ticket.
+        if os.path.exists(worktree_path):
+            try:
+                repo.git.worktree("remove", "--force", worktree_path)
+            except Exception:
+                shutil.rmtree(worktree_path, ignore_errors=True)
+                repo.git.worktree("prune")
+
+        repo.git.worktree("add", worktree_path, branch_name)
+        logger.info(f"Created worktree at {worktree_path} for branch {branch_name}")
+        return worktree_path
+
+    def has_changes(self, worktree_path: str | None = None) -> bool:
+        """Return True if the given path (or main workspace) has uncommitted changes."""
+        target = worktree_path or self.workspace_dir
+        if target == self.workspace_dir:
+            return self.local_repo.is_dirty(untracked_files=True)
+        return Repo(target).is_dirty(untracked_files=True)
+
+    def commit_and_push(
+        self, branch_name: str, commit_message: str, worktree_path: str | None = None
+    ) -> str:
+        """Stage all changes, commit, and push to remote."""
+        target = worktree_path or self.workspace_dir
+        repo = self.local_repo if target == self.workspace_dir else Repo(target)
 
         # Stage all changes
         repo.git.add("--all")

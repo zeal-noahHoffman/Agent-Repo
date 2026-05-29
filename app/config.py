@@ -36,3 +36,7 @@ class Config:
 
     # Workspace
     WORKSPACE_DIR: str = os.getenv("WORKSPACE_DIR", "/workspace")
+    WORKTREES_DIR: str = os.getenv("WORKTREES_DIR", "/workspace/worktrees")
+
+    # Skills
+    SKILLS_DIR: str = os.getenv("SKILLS_DIR", "/skills")

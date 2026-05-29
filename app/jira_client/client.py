@@ -82,6 +82,11 @@ class JiraClient:
 
         return text
 
+    def add_comment(self, ticket_key: str, comment_text: str) -> None:
+        """Post a plain-text comment on a Jira ticket."""
+        logger.info(f"Adding comment to {ticket_key}")
+        self.client.issue_add_comment(ticket_key, comment_text)
+
     def _extract_acceptance_criteria(self, fields: dict) -> str:
         """Try to extract acceptance criteria from common custom fields."""
         # Common field names for acceptance criteria
