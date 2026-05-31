@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Robot from "./Robot.jsx";
 
 // The agent writes structured log lines to stdout (see app/utils/logger.py).
 // This dashboard polls a small HTTP endpoint that exposes those lines. The
@@ -21,6 +22,28 @@ const SAMPLE_LOGS = [
 ];
 
 const LEVELS = ["ALL", "INFO", "WARNING", "ERROR", "DEBUG"];
+
+const ROBOT_LABELS = {
+  idle: "Idle — waiting for a task",
+  thinking: "Thinking…",
+  working: "Working…",
+  waiting: "Waiting on you",
+};
+
+// Infer the robot's mood from the most recent log line. Mirrors the agent's
+// real lifecycle: plan (thinking) → await approval (waiting) → implement
+// (working) → done/failed (idle).
+function deriveRobotState(logs, status) {
+  if (status === "connecting") return "idle";
+  const last = logs[logs.length - 1];
+  if (!last) return "idle";
+  const m = last.message.toLowerCase();
+  if (/done|complete|fail|error|shut|idle|greeting/.test(m)) return "idle";
+  if (/wait|approval|approve|react with|pending/.test(m)) return "waiting";
+  if (/implement|phase 2|writing|commit|push|opening pr|pr opened|generat/.test(m)) return "working";
+  if (/plan|phase 1|analy|loom|think|on it|running/.test(m)) return "thinking";
+  return "idle";
+}
 
 function normalize(raw) {
   // Accept either structured objects or plain log strings from the backend.
@@ -88,15 +111,23 @@ export default function App() {
     scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [visible, paused]);
 
+  const robotState = useMemo(() => deriveRobotState(logs, status), [logs, status]);
+
   return (
     <div className="app">
       <header className="header">
         <div className="title">
-          <h1>Agent Dashboard</h1>
-          <span className={`status status--${status}`}>
-            <span className="dot" />
-            {status === "live" ? "Live" : status === "offline" ? "Disconnected" : "Connecting…"}
-          </span>
+          <div className="mascot">
+            <Robot state={robotState} />
+            <span className="mascot__label">{ROBOT_LABELS[robotState]}</span>
+          </div>
+          <div className="title__text">
+            <h1>Agent Dashboard</h1>
+            <span className={`status status--${status}`}>
+              <span className="dot" />
+              {status === "live" ? "Live" : status === "offline" ? "Disconnected" : "Connecting…"}
+            </span>
+          </div>
         </div>
         <div className="controls">
           <input

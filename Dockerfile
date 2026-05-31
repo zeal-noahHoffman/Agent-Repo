@@ -21,6 +21,16 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
+# Build the dashboard frontend; the agent's HTTP server serves it from
+# frontend/dist at /. node_modules is dropped afterwards to keep the image lean.
+RUN cd frontend \
+    && npm ci \
+    && npm run build \
+    && rm -rf node_modules
+
+# The dashboard / log API listens here (Railway overrides via $PORT).
+EXPOSE 8000
+
 # Run as a non-root user: the Agent SDK refuses bypassPermissions mode as root.
 RUN useradd -m agent \
     && mkdir -p /workspace \
