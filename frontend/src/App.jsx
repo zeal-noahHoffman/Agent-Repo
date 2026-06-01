@@ -1,11 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Robot from "./Robot.jsx";
 
-// The agent writes structured log lines to stdout (see app/utils/logger.py).
-// This dashboard polls a small HTTP endpoint that exposes those lines. The
-// endpoint does not exist yet — wiring it up is the next step — so the UI is
-// built to degrade gracefully and show clearly when it can't reach the agent.
-const LOGS_ENDPOINT = "/api/logs";
+// The agent writes structured log lines to stdout (see app/utils/logger.py)
+// and exposes them at /api/logs. This dashboard polls that endpoint.
+//
+// VITE_API_BASE is baked in at build time: leave it unset for same-origin
+// (single service, where the agent also serves this build), or set it to the
+// agent's public URL (e.g. https://agent.up.railway.app) when the dashboard is
+// deployed as its own service. The agent sends CORS headers for this.
+const API_BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/$/, "");
+const LOGS_ENDPOINT = `${API_BASE}/api/logs`;
 const POLL_INTERVAL_MS = 3000;
 
 // Sample lines shown before the backend log endpoint is connected, so the
