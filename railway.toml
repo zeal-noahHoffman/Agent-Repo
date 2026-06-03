@@ -3,5 +3,11 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
+# This bot MUST run as a single instance. It uses Slack Socket Mode (events are
+# load-balanced across every open connection) and a per-instance /data volume for
+# pending-batch approvals + the dashboard log buffer. With >1 replica, a plan and its
+# approval can land on different instances — the second sees "nothing pending" because
+# the batch lives in the first instance's volume. Keep this at 1.
+numReplicas = 1
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 5

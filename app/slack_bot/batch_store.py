@@ -72,7 +72,10 @@ def store(thread_ts: str, state: dict) -> None:
         data = _prune(_load())
         data[thread_ts] = {**state, "stored_at": time.time()}
         _save(data)
-    logger.info(f"Stored pending batch under thread {thread_ts}")
+    logger.info(
+        f"Stored pending batch under thread {thread_ts} "
+        f"(pid={os.getpid()}, store={_PATH})"
+    )
 
 
 def pop(thread_ts: str) -> dict | None:
@@ -86,6 +89,8 @@ def pop(thread_ts: str) -> dict | None:
         remaining = list(data.keys())
     if state is None:
         logger.info(
-            f"No pending batch for thread {thread_ts}; known threads: {remaining}"
+            f"No pending batch for thread {thread_ts}; known threads: {remaining} "
+            f"(pid={os.getpid()}, store={_PATH}). If a plan was just stored under a "
+            f"different pid/store, more than one instance is running — see railway.toml."
         )
     return state
