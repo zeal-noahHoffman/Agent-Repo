@@ -197,23 +197,13 @@ def _batch_event_handler(post):
             elif status == "failed":
                 post(f"❌ `{kw['key']}` failed: {kw['result'].get('error', 'unknown error')}")
         # ---- integration phase (integrate) ----
+        # Per-merge events (merge_clean / merge_conflict / merge_resolved /
+        # merge_failed) are intentionally NOT posted to Slack — the back-and-forth
+        # of conflict resolution is dashboard detail. Slack shows only the start
+        # ("Merging…") and the final outcome ("Success! Combined PR opened").
         elif name == "integrate_start":
             order = ", ".join(f"`{k}`" for k in kw["to_merge"])
             post(f"🧵 Merging {order} into `{kw['integration_branch']}` in dependency order…")
-        elif name == "merge_clean":
-            post(f"🔀 `{kw['key']}` merged cleanly")
-        elif name == "merge_conflict":
-            files = ", ".join(f"`{f}`" for f in kw["files"])
-            post(f"⚠️ `{kw['key']}` conflicts in {files} — resolving with an agent…")
-        elif name == "merge_resolved":
-            post(f"🧩 `{kw['key']}` conflicts resolved and merged")
-        elif name == "merge_failed":
-            extra = ""
-            if kw.get("excluded"):
-                extra = " (also excluding " + ", ".join(
-                    f"`{k}`" for k in kw["excluded"]
-                ) + ")"
-            post(f"❌ `{kw['key']}` couldn't be merged — excluding it{extra}")
 
     return on_event
 
@@ -287,8 +277,7 @@ def _run_batch_build(state: dict) -> None:
 
     post(
         f"*Batch build complete* — {len(built)}/{len(batch_plan['ticket_keys'])} built on "
-        f"`{result['integration_branch']}`: {', '.join(f'`{k}`' for k in built)}.\n"
-        f"_Merging them into one combined PR…_"
+        f"`{result['integration_branch']}`: {', '.join(f'`{k}`' for k in built)}."
     )
 
     try:
@@ -300,10 +289,10 @@ def _run_batch_build(state: dict) -> None:
 
     if integ.get("success"):
         merged = ", ".join(f"`{k}`" for k in integ["merged"])
-        msg = f"*Combined PR opened* — {merged}\n{integ['pr_url']}"
+        msg = f"*Success!* Combined PR opened — {merged}\n{integ['pr_url']}"
         if integ.get("merge_failed") or integ.get("excluded"):
             left_out = sorted(set(integ.get("merge_failed", [])) | set(integ.get("excluded", [])))
-            msg += "\n_Excluded (merge conflicts): " + ", ".join(
+            msg += "\n_Not included (see dashboard for details): " + ", ".join(
                 f"`{k}`" for k in left_out
             ) + "._"
         post(msg)
