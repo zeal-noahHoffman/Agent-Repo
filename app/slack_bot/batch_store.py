@@ -89,14 +89,3 @@ def pop(thread_ts: str) -> dict | None:
             f"No pending batch for thread {thread_ts}; known threads: {remaining}"
         )
     return state
-
-
-def thread_for_message(message_ts: str) -> str | None:
-    """Return the thread of the pending batch whose combined-plan message is ``message_ts``
-    (used to resolve a ✅ reaction back to its batch)."""
-    with _LOCK:
-        data = _prune(_load())
-    for thread_ts, state in data.items():
-        if state.get("plan_message_ts") == message_ts:
-            return thread_ts
-    return None

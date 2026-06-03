@@ -17,17 +17,16 @@ os.environ["PENDING_BATCH_FILE"] = os.path.join(tempfile.mkdtemp(), "pending.jso
 from app.slack_bot import batch_store
 
 
-def _state(thread_ts, planned, plan_message_ts):
+def _state(thread_ts, planned):
     return {
         "batch_plan": {"planned": list(planned)},
         "channel": "C123",
         "thread_ts": thread_ts,
-        "plan_message_ts": plan_message_ts,
     }
 
 
 def test_in_thread_approve_finds_and_consumes_batch():
-    batch_store.store("T0", _state("T0", ["KAN-9", "KAN-14", "KAN-15"], "M1"))
+    batch_store.store("T0", _state("T0", ["KAN-9", "KAN-14", "KAN-15"]))
     # Approval reply in the same thread → looked up by the thread's root ts.
     state = batch_store.pop("T0")
     assert state is not None, "in-thread approve should find the pending batch"
@@ -38,7 +37,7 @@ def test_in_thread_approve_finds_and_consumes_batch():
 
 
 def test_pending_batch_survives_restart():
-    batch_store.store("T1", _state("T1", ["KAN-9", "KAN-14", "KAN-15"], "M2"))
+    batch_store.store("T1", _state("T1", ["KAN-9", "KAN-14", "KAN-15"]))
     # Simulate a redeploy / second worker: fresh module state, same file on disk.
     importlib.reload(batch_store)
     state = batch_store.pop("T1")
@@ -47,23 +46,13 @@ def test_pending_batch_survives_restart():
     print("ok: pending batch survives a restart / different worker")
 
 
-def test_reaction_resolves_batch_by_plan_message():
-    batch_store.store("T2", _state("T2", ["AB-1"], "M3"))
-    assert batch_store.thread_for_message("M3") == "T2"
-    assert batch_store.thread_for_message("unknown-ts") is None
-    batch_store.pop("T2")
-    # Once consumed, the reaction lookup no longer resolves it.
-    assert batch_store.thread_for_message("M3") is None
-    print("ok: ✅ reaction resolves the batch by its plan message")
-
-
 def test_unknown_thread_returns_none():
     assert batch_store.pop("does-not-exist") is None
     print("ok: unknown thread returns None")
 
 
 def test_abandoned_batch_self_expires():
-    batch_store.store("T_old", _state("T_old", ["AB-1"], "M9"))
+    batch_store.store("T_old", _state("T_old", ["AB-1"]))
     # Backdate it past the TTL by rewriting the file directly.
     import json
     with open(batch_store._PATH, "r", encoding="utf-8") as f:
@@ -73,14 +62,12 @@ def test_abandoned_batch_self_expires():
         json.dump(data, f)
     # An expired batch is no longer approvable and is swept from the file.
     assert batch_store.pop("T_old") is None
-    assert batch_store.thread_for_message("M9") is None
     print("ok: abandoned batch self-expires after the TTL")
 
 
 if __name__ == "__main__":
     test_in_thread_approve_finds_and_consumes_batch()
     test_pending_batch_survives_restart()
-    test_reaction_resolves_batch_by_plan_message()
     test_unknown_thread_returns_none()
     test_abandoned_batch_self_expires()
     print("\nAll batch_store tests passed.")

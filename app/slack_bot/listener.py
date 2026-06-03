@@ -18,13 +18,11 @@ scheduler = BatchScheduler(orchestrator)
 
 TICKET_PATTERN = re.compile(r"[A-Z][A-Z0-9]+-\d+")
 APPROVE_PATTERN = re.compile(r"\bapprove\b", re.IGNORECASE)
-APPROVAL_REACTIONS = {"white_check_mark", "heavy_check_mark"}
 
 # In-memory approval state for the single-ticket flow.  Keyed by ticket_key.
-# Value: {plan, branch_name, worktree_path, ticket, thread_ts, channel, plan_message_ts}
+# Value: {plan, branch_name, worktree_path, ticket, thread_ts, channel}
+# Approval is gated to the thread the plan was posted in (state["thread_ts"]).
 _pending: dict[str, dict] = {}
-# Maps a plan message ts → ticket_key so reaction events can resolve the ticket.
-_message_to_ticket: dict[str, str] = {}
 _state_lock = threading.Lock()
 
 # Batch approval state is persisted (see batch_store) so an in-thread `approve` finds the
@@ -42,28 +40,26 @@ def _allowed(channel: str) -> bool:
 def _store_pending(ticket_key: str, state: dict) -> None:
     with _state_lock:
         _pending[ticket_key] = state
-        if state.get("plan_message_ts"):
-            _message_to_ticket[state["plan_message_ts"]] = ticket_key
 
 
-def _pop_pending(ticket_key: str) -> dict | None:
+def _pop_pending_in_thread(ticket_key: str, thread_ts: str) -> dict | None:
+    """Pop the pending plan for ``ticket_key``, but only if it was posted in ``thread_ts``.
+
+    Approval is gated to the plan's own thread: an ``approve`` typed in another thread, or
+    at the channel root, must not consume a plan that is waiting elsewhere.
+    """
     with _state_lock:
-        state = _pending.pop(ticket_key, None)
-        if state and state.get("plan_message_ts"):
-            _message_to_ticket.pop(state["plan_message_ts"], None)
-        return state
-
-
-def _ticket_for_message(message_ts: str) -> str | None:
-    with _state_lock:
-        return _message_to_ticket.get(message_ts)
+        state = _pending.get(ticket_key)
+        if not state or state.get("thread_ts") != thread_ts:
+            return None
+        return _pending.pop(ticket_key, None)
 
 
 # Batch approval state is persisted to disk (keyed by thread_ts) so it survives restarts
-# and is visible to every worker — see app/slack_bot/batch_store.py.
+# and is visible to every worker — see app/slack_bot/batch_store.py. Keying by thread_ts
+# also gates batch approval to the batch's own thread.
 _store_pending_batch = batch_store.store
 _pop_pending_batch = batch_store.pop
-_batch_thread_for_message = batch_store.thread_for_message
 
 
 # ---------------------------------------------------------------------------
@@ -92,16 +88,14 @@ def _run_phase1(ticket_key: str, channel: str, thread_ts: str, say) -> None:
     plan = result["plan"]
     plan_preview = plan[:2000] + ("…" if len(plan) > 2000 else "")
 
-    response = say(
+    say(
         text=(
             f"Planning complete for `{ticket_key}`. Here's the exec plan:\n\n"
             f"```\n{plan_preview}\n```\n\n"
-            f"_React with ✅ or reply `@agent approve {ticket_key}` to begin implementation._"
+            f"_Reply `@agent approve {ticket_key}` in this thread to begin implementation._"
         ),
         thread_ts=thread_ts,
     )
-
-    plan_message_ts = response.get("ts") if response else None
 
     _store_pending(
         ticket_key,
@@ -112,10 +106,9 @@ def _run_phase1(ticket_key: str, channel: str, thread_ts: str, say) -> None:
             "ticket": result["ticket"],
             "thread_ts": thread_ts,
             "channel": channel,
-            "plan_message_ts": plan_message_ts,
         },
     )
-    logger.info(f"Waiting for approval on {ticket_key} (plan_message_ts={plan_message_ts})")
+    logger.info(f"Waiting for approval on {ticket_key} in thread {thread_ts}")
 
 
 # ---------------------------------------------------------------------------
@@ -227,15 +220,14 @@ def _run_batch_plan(ticket_keys: list[str], channel: str, thread_ts: str, say) -
         return
 
     keys_str = ", ".join(f"`{k}`" for k in planned)
-    response = say(
+    say(
         text=(
             f"Planning complete for {keys_str}. Here's the combined plan:\n\n"
             f"{batch_plan['synthesis']}\n\n"
-            f"_React ✅ or reply `@agent approve` to build all {len(planned)} in dependency order._"
+            f"_Reply `@agent approve` in this thread to build all {len(planned)} in dependency order._"
         ),
         thread_ts=thread_ts,
     )
-    plan_message_ts = response.get("ts") if response else None
 
     _store_pending_batch(
         thread_ts,
@@ -243,12 +235,10 @@ def _run_batch_plan(ticket_keys: list[str], channel: str, thread_ts: str, say) -
             "batch_plan": batch_plan,
             "channel": channel,
             "thread_ts": thread_ts,
-            "plan_message_ts": plan_message_ts,
         },
     )
     logger.info(
-        f"Waiting for batch approval on thread {thread_ts} "
-        f"(planned={planned}, plan_message_ts={plan_message_ts})"
+        f"Waiting for batch approval on thread {thread_ts} (planned={planned})"
     )
 
 
@@ -317,28 +307,22 @@ def handle_mention(event, say):
     ticket_keys = list(dict.fromkeys(TICKET_PATTERN.findall(text)))
 
     # ---- approve ---------------------------------------------------------
-    # Batch approval is gated to the batch's own thread: reply `@agent approve` (with or
-    # without ticket keys) in the thread where the combined plan was posted. The pending
-    # batch is looked up by that thread_ts. Batch takes precedence over a single-ticket plan.
+    # Approval happens ONLY via text, and ONLY in the thread the plan was posted in:
+    #   `@agent approve`         → approve the batch planned in THIS thread
+    #   `@agent approve KAT-12`  → approve the single ticket planned in THIS thread
+    # An `approve` typed in any other thread, or at the channel root, finds nothing pending
+    # for that thread and is ignored — it can never kick off work from the wrong place.
     if APPROVE_PATTERN.search(text):
-        batch_state = _pop_pending_batch(thread_ts)
-        if batch_state:
-            n = len(batch_state["batch_plan"]["planned"])
-            say(
-                text=f"Approved! Building all {n} tickets in dependency order now…",
-                thread_ts=thread_ts,
-            )
-            threading.Thread(
-                target=_run_batch_build, args=(batch_state,), daemon=True
-            ).start()
-            return
-
         if ticket_keys:
             ticket_key = ticket_keys[0]
-            state = _pop_pending(ticket_key)
+            state = _pop_pending_in_thread(ticket_key, thread_ts)
             if not state:
                 say(
-                    text=f"No pending plan found for `{ticket_key}`. Start with `@agent {ticket_key}` first.",
+                    text=(
+                        f"No pending plan for `{ticket_key}` awaiting approval in this "
+                        f"thread. Approve in the thread where its plan was posted, or "
+                        f"start it with `@agent {ticket_key}` first."
+                    ),
                     thread_ts=thread_ts,
                 )
                 return
@@ -348,6 +332,18 @@ def handle_mention(event, say):
             )
             threading.Thread(
                 target=_run_phase2, args=(ticket_key, state, say), daemon=True
+            ).start()
+            return
+
+        batch_state = _pop_pending_batch(thread_ts)
+        if batch_state:
+            n = len(batch_state["batch_plan"]["planned"])
+            say(
+                text=f"Approved! Building all {n} tickets in dependency order now…",
+                thread_ts=thread_ts,
+            )
+            threading.Thread(
+                target=_run_batch_build, args=(batch_state,), daemon=True
             ).start()
             return
 
@@ -384,7 +380,7 @@ def handle_mention(event, say):
         say(
             text=(
                 f"`{ticket_key}` is already awaiting approval. "
-                f"React ✅ or reply `@agent approve {ticket_key}` to proceed."
+                f"Reply `@agent approve {ticket_key}` in its thread to proceed."
             ),
             thread_ts=thread_ts,
         )
@@ -397,61 +393,6 @@ def handle_mention(event, say):
     threading.Thread(
         target=_run_phase1,
         args=(ticket_key, channel, thread_ts, say),
-        daemon=True,
-    ).start()
-
-
-@app.event("reaction_added")
-def handle_reaction(event, say):
-    reaction = event.get("reaction", "")
-    if reaction not in APPROVAL_REACTIONS:
-        return
-
-    item = event.get("item", {})
-    if item.get("type") != "message":
-        return
-
-    message_ts = item.get("ts")
-
-    # ---- batch approval via reaction on the combined-plan message ----
-    batch_thread = _batch_thread_for_message(message_ts)
-    if batch_thread:
-        batch_state = _pop_pending_batch(batch_thread)
-        if not batch_state:
-            return
-        n = len(batch_state["batch_plan"]["planned"])
-        logger.info(f"Batch reaction approval for thread {batch_thread} (:{reaction}:)")
-        app.client.chat_postMessage(
-            channel=batch_state["channel"],
-            text=f"Approved via :{reaction}: Building all {n} tickets in dependency order now…",
-            thread_ts=batch_state["thread_ts"],
-        )
-        threading.Thread(
-            target=_run_batch_build, args=(batch_state,), daemon=True
-        ).start()
-        return
-
-    ticket_key = _ticket_for_message(message_ts)
-    if not ticket_key:
-        return
-
-    state = _pop_pending(ticket_key)
-    if not state:
-        return
-
-    logger.info(f"Reaction approval received for {ticket_key} (:{reaction}:)")
-
-    def _say_in_thread(text, **kwargs):
-        app.client.chat_postMessage(
-            channel=state["channel"],
-            text=text,
-            thread_ts=state["thread_ts"],
-        )
-
-    _say_in_thread(f"Approved via :{reaction}: Starting implementation of `{ticket_key}` now…")
-    threading.Thread(
-        target=_run_phase2,
-        args=(ticket_key, state, _say_in_thread),
         daemon=True,
     ).start()
 
