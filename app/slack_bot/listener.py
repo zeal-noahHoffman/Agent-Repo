@@ -176,6 +176,12 @@ def _batch_event_handler(post):
                 f"Integration branch `{kw['integration_branch']}` created. Planning each "
                 f"ticket now…\n{dep_summary}"
             )
+        elif name == "label_skipped":
+            keys = ", ".join(f"`{k}`" for k in kw["keys"])
+            post(
+                f"⛔ Skipping {keys} — missing the required `{kw['label']}` label. "
+                f"Add it in Jira to have me pick these up."
+            )
         elif name == "plan_failed":
             post(f"❌ Planning failed for `{kw['key']}`: {kw.get('error', 'unknown error')}")
         # ---- build phase (build_batch) ----

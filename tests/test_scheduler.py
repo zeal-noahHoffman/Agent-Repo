@@ -13,17 +13,25 @@ import time
 from app.agent.scheduler import (
     BatchScheduler, DONE, FAILED, BLOCKED,
 )
+from app.jira_client.client import JiraClient
 
 
 class FakeJira:
-    def __init__(self, deps=None):
+    def __init__(self, deps=None, labels=None):
         self._deps = deps or {}  # {key: [dependency keys]}
+        # {key: [labels]}. Default: every ticket carries the intake label so the
+        # gate passes unless a test deliberately withholds it.
+        self._labels = labels or {}
         self.transitions = []    # [(key, status)] recorded by integrate
         self.comments = []       # [(key, text)]
 
     def get_ticket(self, key):
         return {"key": key, "summary": f"summary {key}",
+                "labels": list(self._labels.get(key, ["Agent-Intake"])),
                 "depends_on": list(self._deps.get(key, [])), "blocks": []}
+
+    def has_required_label(self, ticket):
+        return JiraClient.has_required_label(ticket)
 
     def transition_ticket(self, key, status):
         self.transitions.append((key, status))
@@ -106,8 +114,9 @@ class FakeGitHubIntegrate(FakeGitHub):
 class FakeOrchestrator:
     """Records the base_ref each ticket ran with and how many ran concurrently."""
 
-    def __init__(self, deps=None, fail=(), github=None, unresolvable=(), plan_fail=()):
-        self.jira = FakeJira(deps)
+    def __init__(self, deps=None, fail=(), github=None, unresolvable=(), plan_fail=(),
+                 labels=None):
+        self.jira = FakeJira(deps, labels=labels)
         self.github = github or FakeGitHub()
         self.fail = set(fail)            # tickets whose BUILD fails
         self.plan_fail = set(plan_fail)  # tickets whose PLANNING fails
@@ -272,6 +281,39 @@ def test_plan_failure_marks_failed_and_blocks_dependents_at_build():
     print("ok: planning failure fails ticket + blocks dependents at build")
 
 
+def test_plan_batch_skips_tickets_without_required_label():
+    # KAT-2 lacks the intake label and must never be planned or scheduled.
+    deps = {"KAT-1": [], "KAT-2": [], "KAT-3": []}
+    orch = FakeOrchestrator(deps, labels={"KAT-2": ["something-else"]})
+    sched = BatchScheduler(orchestrator=orch, max_concurrency=4)
+
+    events = []
+    bp = sched.plan_batch(list(deps), on_event=lambda n, **kw: events.append((n, kw)))
+
+    assert bp["skipped_no_label"] == ["KAT-2"]
+    assert set(bp["planned"]) == {"KAT-1", "KAT-3"}
+    assert "KAT-2" not in bp["ticket_keys"]
+    # The unlabeled ticket was never run through planning.
+    assert "KAT-2" not in orch.planned_base_refs
+    # A label_skipped event reported it.
+    skipped = [kw for n, kw in events if n == "label_skipped"]
+    assert skipped and skipped[0]["keys"] == ["KAT-2"]
+    print("ok: plan_batch skips tickets missing the required label")
+
+
+def test_plan_batch_all_unlabeled_returns_empty_no_branch():
+    deps = {"KAT-1": [], "KAT-2": []}
+    orch = FakeOrchestrator(deps, labels={"KAT-1": [], "KAT-2": []})
+    sched = BatchScheduler(orchestrator=orch, max_concurrency=4)
+    bp = sched.plan_batch(list(deps))
+    assert bp["planned"] == []
+    assert set(bp["skipped_no_label"]) == {"KAT-1", "KAT-2"}
+    assert bp["integration_branch"] is None
+    # No integration branch was ever created.
+    assert orch.github.integration_branch is None
+    print("ok: plan_batch with all-unlabeled tickets builds no branch")
+
+
 # ---------------------------------------------------------------------------
 # Integration (integrate) — merge fan-in, conflict resolution, combined PR
 # ---------------------------------------------------------------------------
@@ -374,6 +416,8 @@ if __name__ == "__main__":
     test_external_dependency_ignored()
     test_plan_batch_plans_each_ticket_and_synthesizes_one_message()
     test_plan_failure_marks_failed_and_blocks_dependents_at_build()
+    test_plan_batch_skips_tickets_without_required_label()
+    test_plan_batch_all_unlabeled_returns_empty_no_branch()
     test_integrate_clean_merges_all_and_opens_one_pr()
     test_integrate_resolves_conflict_with_both_plans()
     test_integrate_unresolvable_conflict_excludes_dependents()

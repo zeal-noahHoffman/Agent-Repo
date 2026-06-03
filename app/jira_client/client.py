@@ -45,6 +45,19 @@ class JiraClient:
         )
         return ticket
 
+    @staticmethod
+    def has_required_label(ticket: dict) -> bool:
+        """Whether ``ticket`` carries the configured intake label.
+
+        Returns True when no required label is configured (gate disabled). The
+        match is case-insensitive so "agent-intake" and "Agent-Intake" both pass.
+        """
+        required = Config.JIRA_REQUIRED_LABEL.strip().lower()
+        if not required:
+            return True
+        labels = {str(l).strip().lower() for l in ticket.get("labels", [])}
+        return required in labels
+
     def _extract_links(self, fields: dict) -> tuple[list[str], list[str]]:
         """Read Jira issue links and return (depends_on, blocks) as lists of keys.
 

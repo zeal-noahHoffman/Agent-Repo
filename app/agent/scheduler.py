@@ -174,7 +174,40 @@ class BatchScheduler:
         # De-dupe while preserving the order the user listed.
         ticket_keys = list(dict.fromkeys(ticket_keys))
 
-        tickets = {k: self.orch.jira.get_ticket(k) for k in ticket_keys}
+        fetched = {k: self.orch.jira.get_ticket(k) for k in ticket_keys}
+
+        # Intake guardrail: drop any ticket missing the required label before we
+        # build a DAG or integration branch around it. run_phase1 enforces the same
+        # rule per ticket; filtering here keeps the schedule (and its reporting) clean.
+        skipped_no_label = [
+            k for k in ticket_keys if not self.orch.jira.has_required_label(fetched[k])
+        ]
+        if skipped_no_label:
+            logger.info(
+                f"Refusing {skipped_no_label}: missing "
+                f"'{Config.JIRA_REQUIRED_LABEL}' label"
+            )
+            emit("label_skipped", keys=list(skipped_no_label),
+                 label=Config.JIRA_REQUIRED_LABEL)
+
+        ticket_keys = [k for k in ticket_keys if k not in set(skipped_no_label)]
+        tickets = {k: fetched[k] for k in ticket_keys}
+
+        if not ticket_keys:
+            emit("batch_planned", integration_branch=None, planned=[],
+                 synthesis="", dag={})
+            return {
+                "integration_branch": None,
+                "dag": {},
+                "ticket_keys": [],
+                "tickets": {},
+                "plans": {},
+                "plan_results": {},
+                "planned": [],
+                "synthesis": "",
+                "skipped_no_label": skipped_no_label,
+            }
+
         dag = self.build_dag(ticket_keys, tickets)
 
         cycle = self.detect_cycle(dag)
@@ -230,6 +263,7 @@ class BatchScheduler:
             "plan_results": plan_results,
             "planned": planned,
             "synthesis": synthesis,
+            "skipped_no_label": skipped_no_label,
         }
 
     # ------------------------------------------------------------------

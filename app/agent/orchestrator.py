@@ -66,6 +66,18 @@ class Orchestrator:
 
             ticket = self.jira.get_ticket(ticket_key)
 
+            # Intake guardrail: refuse any ticket lacking the required label before
+            # touching the board, git, or the agent. This is the single chokepoint
+            # both the single-ticket and batch flows pass through.
+            if not self.jira.has_required_label(ticket):
+                msg = (
+                    f"`{ticket_key}` is missing the required "
+                    f"`{Config.JIRA_REQUIRED_LABEL}` label, so I won't pick it up. "
+                    f"Add the label in Jira and try again."
+                )
+                logger.info(f"Refusing {ticket_key}: missing '{Config.JIRA_REQUIRED_LABEL}' label")
+                return {"success": False, "error": msg, "skipped_no_label": True}
+
             # Mark the ticket as picked up.
             self.jira.transition_ticket(ticket_key, Config.JIRA_STATUS_IN_PROGRESS)
 

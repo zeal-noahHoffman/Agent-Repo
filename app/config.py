@@ -36,6 +36,10 @@ class Config:
     # board exactly. Transitions are best-effort — a mismatch is logged, not fatal.
     JIRA_STATUS_IN_PROGRESS: str = os.getenv("JIRA_STATUS_IN_PROGRESS", "In Progress")
     JIRA_STATUS_IN_REVIEW: str = os.getenv("JIRA_STATUS_IN_REVIEW", "In Review")
+    # The agent only picks up tickets carrying this label. This is an intake
+    # guardrail: a ticket without it is refused before any work begins. Matched
+    # case-insensitively. Set to empty to disable the gate (pick up any ticket).
+    JIRA_REQUIRED_LABEL: str = os.getenv("JIRA_REQUIRED_LABEL", "Agent-Intake")
 
     # GitHub
     GITHUB_TOKEN: str = os.environ["GITHUB_TOKEN"]
