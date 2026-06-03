@@ -14,6 +14,9 @@ class Config:
     AGENT_MAX_TURNS: int = int(os.getenv("AGENT_MAX_TURNS", "60"))
     # Hard spend cap per ticket (one agent run). Not a lifetime cap.
     AGENT_MAX_BUDGET_USD: float = float(os.getenv("AGENT_MAX_BUDGET_USD", "5.0"))
+    # Max tickets built concurrently in a batch. Independent tickets fan out up to this
+    # cap; the rest queue. Bounds API spend, CPU, and rate-limit exposure.
+    AGENT_MAX_CONCURRENCY: int = int(os.getenv("AGENT_MAX_CONCURRENCY", "3"))
 
     # Slack
     SLACK_BOT_TOKEN: str = os.environ["SLACK_BOT_TOKEN"]

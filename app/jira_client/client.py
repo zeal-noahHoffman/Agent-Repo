@@ -22,6 +22,8 @@ class JiraClient:
 
         fields = issue.get("fields", {})
 
+        depends_on, blocks = self._extract_links(fields)
+
         # Extract relevant fields
         ticket = {
             "key": ticket_key,
@@ -32,10 +34,38 @@ class JiraClient:
             "priority": fields.get("priority", {}).get("name", ""),
             "labels": fields.get("labels", []),
             "acceptance_criteria": self._extract_acceptance_criteria(fields),
+            # Dependency ordering for batch scheduling (Jira "Blocks" links).
+            "depends_on": depends_on,  # keys that must finish before this ticket
+            "blocks": blocks,          # keys this ticket blocks
         }
 
-        logger.info(f"Fetched ticket: {ticket_key} - {ticket['summary']}")
+        logger.info(
+            f"Fetched ticket: {ticket_key} - {ticket['summary']} "
+            f"(depends_on={depends_on or 'none'})"
+        )
         return ticket
+
+    def _extract_links(self, fields: dict) -> tuple[list[str], list[str]]:
+        """Read Jira issue links and return (depends_on, blocks) as lists of keys.
+
+        Only "Blocks"-type links express ordering we act on. On a Blocks link attached
+        to this issue, an ``inwardIssue`` is a blocker (this issue *is blocked by* it, so
+        we depend on it) and an ``outwardIssue`` is something this issue blocks. Other
+        link types (relates to, duplicates, …) carry no ordering and are ignored.
+        """
+        depends_on: list[str] = []
+        blocks: list[str] = []
+        for link in fields.get("issuelinks", []) or []:
+            type_name = ((link.get("type") or {}).get("name") or "").strip().lower()
+            if type_name != "blocks":
+                continue
+            inward = link.get("inwardIssue") or {}
+            outward = link.get("outwardIssue") or {}
+            if inward.get("key"):
+                depends_on.append(inward["key"])
+            if outward.get("key"):
+                blocks.append(outward["key"])
+        return depends_on, blocks
 
     def transition_ticket(self, ticket_key: str, target_status: str) -> bool:
         """Move a ticket to a status/column by name (e.g. "In Progress").

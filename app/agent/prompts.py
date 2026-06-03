@@ -89,6 +89,99 @@ summary of the changes made and the verification result.
 """
 
 
+_CONFLICT_SYSTEM_PROMPT_TEMPLATE = """\
+You are an expert software engineer resolving git MERGE CONFLICTS during the integration of \
+several independently-built Jira tickets in an autonomous coding agent pipeline.
+
+Each ticket was implemented on its own branch from the same starting point and is now being \
+merged into one integration branch. Two of them changed overlapping code, so git left \
+conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`) in the files below.
+
+## Your job
+Resolve every conflict so that the requirements of EVERY ticket listed below still hold. The \
+exec plan and acceptance criteria for each ticket are provided so you can reconcile both \
+intents rather than picking a side.
+
+## Rules
+- NEVER resolve a conflict by simply discarding one ticket's changes. Integrate both intents \
+so each ticket's acceptance criteria remain satisfied. Only drop a hunk if the two changes are \
+genuinely the same edit (a true duplicate).
+- Remove ALL conflict markers from every listed file. Leave no `<<<<<<<`, `=======`, or \
+`>>>>>>>` behind.
+- Touch only what's needed to resolve the conflicts and keep the codebase coherent and \
+building. Don't re-architect.
+- After resolving, run the project's build and tests to verify the merged result works. Fix \
+any failures you introduced.
+- Do NOT run ANY git commands (no add, commit, merge, checkout, push, rebase). Staging and \
+committing the resolved merge is handled outside this session — just edit the files.
+- Your FINAL message must summarize, per conflicted file, how you reconciled the two sides.
+
+{skills_block}
+"""
+
+
+def _get_conflict_system_prompt() -> str:
+    skills_block = _build_skills_block("loom", "leap-ci")
+    return _CONFLICT_SYSTEM_PROMPT_TEMPLATE.format(skills_block=skills_block)
+
+
+_BATCH_SYNTHESIS_SYSTEM_PROMPT = """\
+You are the lead engineer summarizing a batch of Jira tickets that were each planned \
+independently (each has its own LOOM exec plan). The team will read ONE Slack message to \
+understand the batch as a whole before approving the build.
+
+Write that single message. It must show you reasoned across ALL the tickets together — not \
+a plan dumped per ticket.
+
+## Structure
+1. A short **shared objective**: what these tickets, taken together, accomplish. If they \
+touch the same area or build toward one outcome, say so.
+2. **Build order**: state the order the tickets should be built and WHY, using the declared \
+dependencies (a ticket that another depends on must come first). Call out what runs in \
+parallel vs. what must wait.
+3. A one- or two-line **goal per ticket** — just the essence, not the full plan (the full \
+plan already lives on each Jira ticket).
+
+## Rules
+- Be concise — this is a chat message, not a document. Use short Slack-friendly markdown \
+(bullets, `backticks` for ticket keys). No long preamble.
+- Do NOT restate each full exec plan. Synthesize.
+- Do NOT invent dependencies or scope that isn't in the provided plans.
+- Output ONLY the message body. Do not add a "Planning complete" greeting or an approval \
+prompt — those are added around your text.
+"""
+
+
+def build_synthesis_prompt(
+    ticket_keys: list[str], tickets: dict, plans: dict, dag: dict
+) -> str:
+    """Prompt for the combined batch-planning message.
+
+    ``dag`` is ``{key: [in-batch dependency keys]}`` so the model can reason about order.
+    Each ticket's full LOOM plan is included as context to synthesize from (it is NOT
+    re-posted verbatim — it already lives on the Jira ticket)."""
+    sections = []
+    for key in ticket_keys:
+        ticket = tickets.get(key, {})
+        deps = sorted(dag.get(key, []))
+        dep_line = (
+            f"Depends on: {', '.join(deps)}" if deps else "Depends on: nothing (independent)"
+        )
+        plan = (plans.get(key) or "").strip() or "(no plan recorded)"
+        sections.append(
+            f"### {key}: {ticket.get('summary', '')}\n{dep_line}\n\n**Its LOOM plan:**\n{plan}"
+        )
+
+    tickets_block = "\n\n".join(sections)
+    order_keys = ", ".join(ticket_keys)
+
+    return (
+        f"Summarize this batch of {len(ticket_keys)} tickets ({order_keys}) into one Slack "
+        f"message: a shared objective, the build order with reasons, and a one-line goal per "
+        f"ticket.\n\n{tickets_block}"
+    )
+
+
 def _get_planning_system_prompt() -> str:
     skills_block = _build_skills_block("loom", "warp")
     exec_plan_template = _load_asset("loom", "exec-plan-template.md")
@@ -108,6 +201,8 @@ def _get_building_system_prompt() -> str:
 # Loaded once at import time so every agent call uses the same prompt within a process.
 PLANNING_SYSTEM_PROMPT: str = _get_planning_system_prompt()
 BUILDING_SYSTEM_PROMPT: str = _get_building_system_prompt()
+CONFLICT_RESOLUTION_SYSTEM_PROMPT: str = _get_conflict_system_prompt()
+BATCH_SYNTHESIS_SYSTEM_PROMPT: str = _BATCH_SYNTHESIS_SYSTEM_PROMPT
 
 # Legacy single-phase name kept for any direct import.
 AGENT_SYSTEM_PROMPT: str = BUILDING_SYSTEM_PROMPT
@@ -151,4 +246,46 @@ def build_resume_prompt(ticket: dict, plan: str) -> str:
         f"Work through the implementation steps, run the build and tests to verify everything "
         f"passes, then write a concise summary of exactly what you changed and the outcome of "
         f"the build/tests."
+    )
+
+
+def build_conflict_prompt(
+    merging_key: str,
+    conflicted_files: list[str],
+    context_tickets: list[str],
+    tickets: dict,
+    plans: dict,
+) -> str:
+    """Conflict-resolution prompt.
+
+    ``merging_key`` is the ticket currently being merged; ``context_tickets`` is that
+    ticket plus every already-merged ticket (the "other side" of the conflict). For each,
+    we surface its summary, acceptance criteria, and exec plan so the agent can satisfy
+    them all rather than choosing one. ``tickets`` and ``plans`` are keyed by ticket key.
+    """
+    file_list = "\n".join(f"- `{f}`" for f in conflicted_files)
+
+    sections = []
+    for key in context_tickets:
+        ticket = tickets.get(key, {})
+        summary = ticket.get("summary", "")
+        criteria = (ticket.get("acceptance_criteria") or "").strip()
+        plan = (plans.get(key) or "").strip() or "(no plan recorded)"
+        role = "being merged now" if key == merging_key else "already merged"
+        block = f"### {key}: {summary}  _({role})_\n"
+        if criteria:
+            block += f"\n**Acceptance criteria**\n{criteria}\n"
+        block += f"\n**Exec plan**\n{plan}\n"
+        sections.append(block)
+
+    tickets_block = "\n\n".join(sections)
+
+    return (
+        f"Merging branch for `{merging_key}` into the integration branch produced conflicts "
+        f"in the following files:\n\n{file_list}\n\n"
+        f"Resolve every conflict so that ALL of the tickets below remain fully satisfied — "
+        f"reconcile their changes, do not discard either side.\n\n"
+        f"## Tickets involved\n\n{tickets_block}\n\n"
+        f"Edit the conflicted files to remove every conflict marker, run the build and tests "
+        f"to verify the merged result, then summarize how you reconciled each file."
     )

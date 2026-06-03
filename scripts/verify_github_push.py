@@ -30,24 +30,27 @@ def main() -> int:
 
     gh = GitHubClient()
 
-    print("1/4 Creating branch...")
-    branch = gh.create_branch(TEST_TICKET_KEY)
-    print(f"     -> {branch}")
+    print("1/4 Creating worktree + branch...")
+    branch, worktree_path = gh.create_worktree(TEST_TICKET_KEY)
+    print(f"     -> {branch} @ {worktree_path}")
 
     print("2/4 Writing a trivial change...")
-    gh.write_file(
-        TEST_FILE,
-        "# Agent push smoke test\n\n"
-        "This file was created by scripts/verify_github_push.py to confirm "
-        "the agent can branch, commit, push, and open a PR. Safe to delete.\n",
-    )
-    if not gh.has_changes():
+    test_path = os.path.join(worktree_path, TEST_FILE)
+    with open(test_path, "w", encoding="utf-8") as f:
+        f.write(
+            "# Agent push smoke test\n\n"
+            "This file was created by scripts/verify_github_push.py to confirm "
+            "the agent can branch, commit, push, and open a PR. Safe to delete.\n"
+        )
+    if not gh.has_changes(worktree_path):
         print("ERROR: no changes detected after writing test file.", file=sys.stderr)
         return 1
     print(f"     -> wrote {TEST_FILE}")
 
     print("3/4 Committing and pushing...")
-    sha = gh.commit_and_push(branch, "chore(GH-SMOKE): verify agent push path")
+    sha = gh.commit_and_push(
+        branch, "chore(GH-SMOKE): verify agent push path", worktree_path
+    )
     print(f"     -> pushed commit {sha[:8]}")
 
     print("4/4 Opening pull request...")
