@@ -32,9 +32,11 @@ RUN cd frontend \
 EXPOSE 8000
 
 # Run as a non-root user: the Agent SDK refuses bypassPermissions mode as root.
+# /workspace: ephemeral code checkout (must start empty for the clone — no volume here).
+# /data: persistent state (pending batches + dashboard logs) — mount the Railway volume here.
 RUN useradd -m agent \
-    && mkdir -p /workspace \
-    && chown -R agent:agent /workspace /app
+    && mkdir -p /workspace /data \
+    && chown -R agent:agent /workspace /data /app
 USER agent
 
 CMD ["python", "-m", "app.main"]

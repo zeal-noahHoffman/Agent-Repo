@@ -14,11 +14,12 @@ everything it needs from the file.
 Scope: this shares state across restarts and across processes on the SAME host. It does
 not span hosts — fine for Socket Mode, which holds a single connection.
 
-Path: defaults to the persistent ``/workspace`` volume so a redeploy / OOM-restart between
-plan and approve doesn't wipe the pending batch (the system temp dir is ephemeral on
-Railway — writing there silently lost batches, which read back as "nothing pending"). Falls
-back to the temp dir when no volume is mounted (local dev / tests). Override with
-``PENDING_BATCH_FILE``.
+Path: defaults to the persistent ``/data`` volume (``DATA_DIR``) so a redeploy / OOM-restart
+between plan and approve doesn't wipe the pending batch (the system temp dir is ephemeral on
+Railway — writing there silently lost batches, which read back as "nothing pending"). This
+is a SEPARATE volume from the ``/workspace`` code checkout, which must stay empty for the
+clone. Falls back to the temp dir when no volume is mounted (local dev / tests). Override
+with ``PENDING_BATCH_FILE``.
 """
 
 import json

@@ -25,10 +25,10 @@ from app.utils.paths import persistent_file
 # reflects what's in Railway without anyone having to open Railway manually.
 #
 # Scope mirrors batch_store: shared across restarts and across processes on the
-# SAME host. Defaults to the persistent /workspace volume (the temp dir is
-# ephemeral on Railway and wiped on restart/redeploy); falls back to the temp dir
-# off-Railway. Override with AGENT_LOG_FILE. Socket Mode holds a single
-# connection, so one host is all we need.
+# SAME host. Defaults to the persistent /data volume (DATA_DIR) — separate from
+# the /workspace code checkout, and durable where the temp dir is ephemeral on
+# Railway; falls back to the temp dir off-Railway. Override with AGENT_LOG_FILE.
+# Socket Mode holds a single connection, so one host is all we need.
 # ---------------------------------------------------------------------------
 
 # Number of recent records the dashboard sees (the file is trimmed back to this).
