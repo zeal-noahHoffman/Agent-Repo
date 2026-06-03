@@ -7,6 +7,7 @@ from slack_bolt.adapter.socket_mode import SocketModeHandler
 from app.config import Config
 from app.agent.orchestrator import Orchestrator
 from app.agent.scheduler import BatchScheduler
+from app.slack_bot import batch_store
 from app.utils.logger import setup_logger
 
 logger = setup_logger("slack_bot")
@@ -19,19 +20,15 @@ TICKET_PATTERN = re.compile(r"[A-Z][A-Z0-9]+-\d+")
 APPROVE_PATTERN = re.compile(r"\bapprove\b", re.IGNORECASE)
 APPROVAL_REACTIONS = {"white_check_mark", "heavy_check_mark"}
 
-# In-memory approval state.  Keyed by ticket_key.
+# In-memory approval state for the single-ticket flow.  Keyed by ticket_key.
 # Value: {plan, branch_name, worktree_path, ticket, thread_ts, channel, plan_message_ts}
 _pending: dict[str, dict] = {}
 # Maps a plan message ts → ticket_key so reaction events can resolve the ticket.
 _message_to_ticket: dict[str, str] = {}
-
-# Batch approval state, keyed by thread_ts (one pending batch per thread).
-# Value: {batch_plan, channel, thread_ts, plan_message_ts}
-_pending_batch: dict[str, dict] = {}
-# Maps a combined-plan message ts → thread_ts so a ✅ reaction resolves the batch.
-_batch_message_to_thread: dict[str, str] = {}
-
 _state_lock = threading.Lock()
+
+# Batch approval state is persisted (see batch_store) so an in-thread `approve` finds the
+# batch even after a redeploy or on a different worker.
 
 
 # ---------------------------------------------------------------------------
@@ -62,24 +59,11 @@ def _ticket_for_message(message_ts: str) -> str | None:
         return _message_to_ticket.get(message_ts)
 
 
-def _store_pending_batch(thread_ts: str, state: dict) -> None:
-    with _state_lock:
-        _pending_batch[thread_ts] = state
-        if state.get("plan_message_ts"):
-            _batch_message_to_thread[state["plan_message_ts"]] = thread_ts
-
-
-def _pop_pending_batch(thread_ts: str) -> dict | None:
-    with _state_lock:
-        state = _pending_batch.pop(thread_ts, None)
-        if state and state.get("plan_message_ts"):
-            _batch_message_to_thread.pop(state["plan_message_ts"], None)
-        return state
-
-
-def _batch_thread_for_message(message_ts: str) -> str | None:
-    with _state_lock:
-        return _batch_message_to_thread.get(message_ts)
+# Batch approval state is persisted to disk (keyed by thread_ts) so it survives restarts
+# and is visible to every worker — see app/slack_bot/batch_store.py.
+_store_pending_batch = batch_store.store
+_pop_pending_batch = batch_store.pop
+_batch_thread_for_message = batch_store.thread_for_message
 
 
 # ---------------------------------------------------------------------------
@@ -338,8 +322,9 @@ def handle_mention(event, say):
     ticket_keys = list(dict.fromkeys(TICKET_PATTERN.findall(text)))
 
     # ---- approve ---------------------------------------------------------
-    # A pending batch is keyed by thread, so "approve" greenlights it even with no ticket
-    # key in the reply. Batch takes precedence over a single-ticket plan in the same thread.
+    # Batch approval is gated to the batch's own thread: reply `@agent approve` (with or
+    # without ticket keys) in the thread where the combined plan was posted. The pending
+    # batch is looked up by that thread_ts. Batch takes precedence over a single-ticket plan.
     if APPROVE_PATTERN.search(text):
         batch_state = _pop_pending_batch(thread_ts)
         if batch_state:
