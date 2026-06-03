@@ -17,7 +17,7 @@ def main():
     # instead of /data — pending approvals will read back as "nothing pending". See
     # railway.toml (numReplicas = 1).
     logger.info(
-        f"Agent Bot starting up (pid={os.getpid()}). "
+        f"Agent Bot starting up (instance={batch_store.INSTANCE}, pid={os.getpid()}). "
         f"Pending-batch store: {batch_store._PATH} | log buffer: {logger_mod._LOG_PATH}"
     )
     # Expose logs to the dashboard over HTTP (daemon thread, non-blocking).

@@ -24,6 +24,7 @@ with ``PENDING_BATCH_FILE``.
 
 import json
 import os
+import socket
 import threading
 import time
 
@@ -31,6 +32,18 @@ from app.utils.logger import setup_logger
 from app.utils.paths import persistent_file
 
 logger = setup_logger("batch_store")
+
+# A per-CONTAINER identity. NOT os.getpid() — every container's main process is PID 1, so
+# pid can't tell two Railway instances apart. Railway gives each replica a unique
+# RAILWAY_REPLICA_ID; the hostname (container id) is a good fallback. If a plan is stored
+# under one INSTANCE and the approve is popped under a different one, more than one instance
+# is handling Slack events — the pending batch lives on the planning instance's volume and
+# the other sees nothing. This bot MUST run as a single instance (see railway.toml).
+INSTANCE = (
+    os.getenv("RAILWAY_REPLICA_ID")
+    or os.getenv("RAILWAY_DEPLOYMENT_ID")
+    or socket.gethostname()
+)
 
 # In-process guard around the read-modify-write. The atomic os.replace on write keeps the
 # file consistent for readers in other processes.
@@ -74,7 +87,7 @@ def store(thread_ts: str, state: dict) -> None:
         _save(data)
     logger.info(
         f"Stored pending batch under thread {thread_ts} "
-        f"(pid={os.getpid()}, store={_PATH})"
+        f"(instance={INSTANCE}, store={_PATH})"
     )
 
 
@@ -90,7 +103,8 @@ def pop(thread_ts: str) -> dict | None:
     if state is None:
         logger.info(
             f"No pending batch for thread {thread_ts}; known threads: {remaining} "
-            f"(pid={os.getpid()}, store={_PATH}). If a plan was just stored under a "
-            f"different pid/store, more than one instance is running — see railway.toml."
+            f"(instance={INSTANCE}, store={_PATH}). If the plan was just stored under a "
+            f"DIFFERENT instance/store above, more than one instance is handling Slack "
+            f"events — only one is allowed (see railway.toml numReplicas=1)."
         )
     return state
