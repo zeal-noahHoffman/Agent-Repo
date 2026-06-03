@@ -11,28 +11,30 @@ is the plan dict produced by ``BatchScheduler.plan_batch`` plus a little Slack r
 context — all plain JSON (branch names, plans, dag), so the building process reconstructs
 everything it needs from the file.
 
-Scope: this shares state across restarts and across processes on the SAME host (the
-default path lives under the system temp dir; override with ``PENDING_BATCH_FILE``). It
-does not span hosts — fine for Socket Mode, which holds a single connection.
+Scope: this shares state across restarts and across processes on the SAME host. It does
+not span hosts — fine for Socket Mode, which holds a single connection.
+
+Path: defaults to the persistent ``/workspace`` volume so a redeploy / OOM-restart between
+plan and approve doesn't wipe the pending batch (the system temp dir is ephemeral on
+Railway — writing there silently lost batches, which read back as "nothing pending"). Falls
+back to the temp dir when no volume is mounted (local dev / tests). Override with
+``PENDING_BATCH_FILE``.
 """
 
 import json
 import os
-import tempfile
 import threading
 import time
 
 from app.utils.logger import setup_logger
+from app.utils.paths import persistent_file
 
 logger = setup_logger("batch_store")
 
 # In-process guard around the read-modify-write. The atomic os.replace on write keeps the
 # file consistent for readers in other processes.
 _LOCK = threading.Lock()
-_PATH = os.getenv(
-    "PENDING_BATCH_FILE",
-    os.path.join(tempfile.gettempdir(), "agent_pending_batches.json"),
-)
+_PATH = os.getenv("PENDING_BATCH_FILE") or persistent_file("agent_pending_batches.json")
 # A batch that's planned but never approved self-expires after this long, so an abandoned
 # (e.g. hung) run can't linger in the file or be approved much later by accident. Long
 # enough that a real "I'll approve after lunch" still works.

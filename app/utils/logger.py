@@ -2,9 +2,10 @@ import json
 import logging
 import os
 import sys
-import tempfile
 from datetime import datetime
 from threading import Lock
+
+from app.utils.paths import persistent_file
 
 # ---------------------------------------------------------------------------
 # File-backed ring buffer of recent log records.
@@ -24,8 +25,10 @@ from threading import Lock
 # reflects what's in Railway without anyone having to open Railway manually.
 #
 # Scope mirrors batch_store: shared across restarts and across processes on the
-# SAME host (default path under the system temp dir; override with AGENT_LOG_FILE).
-# Socket Mode holds a single connection, so one host is all we need.
+# SAME host. Defaults to the persistent /workspace volume (the temp dir is
+# ephemeral on Railway and wiped on restart/redeploy); falls back to the temp dir
+# off-Railway. Override with AGENT_LOG_FILE. Socket Mode holds a single
+# connection, so one host is all we need.
 # ---------------------------------------------------------------------------
 
 # Number of recent records the dashboard sees (the file is trimmed back to this).
@@ -34,10 +37,7 @@ LOG_BUFFER_SIZE = int(os.getenv("LOG_BUFFER_SIZE", "1000"))
 # so we rewrite the whole file only once every LOG_BUFFER_SIZE records rather
 # than on every single log line.
 _MAX_LINES = LOG_BUFFER_SIZE * 2
-_LOG_PATH = os.getenv(
-    "AGENT_LOG_FILE",
-    os.path.join(tempfile.gettempdir(), "agent_logs.jsonl"),
-)
+_LOG_PATH = os.getenv("AGENT_LOG_FILE") or persistent_file("agent_logs.jsonl")
 # In-process guard around the append / trim. Appends are line-sized so the OS
 # keeps them whole for readers in other processes; the atomic os.replace on trim
 # keeps the file consistent.
