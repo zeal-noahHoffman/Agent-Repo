@@ -35,7 +35,7 @@ logger = setup_logger("batch_store")
 # In-process guard around the read-modify-write. The atomic os.replace on write keeps the
 # file consistent for readers in other processes.
 _LOCK = threading.Lock()
-_PATH = os.getenv("PENDING_BATCH_FILE") or persistent_file("agent_pending_batches.json")
+_PATH = persistent_file("agent_pending_batches.json", os.getenv("PENDING_BATCH_FILE"))
 # A batch that's planned but never approved self-expires after this long, so an abandoned
 # (e.g. hung) run can't linger in the file or be approved much later by accident. Long
 # enough that a real "I'll approve after lunch" still works.

@@ -37,7 +37,7 @@ LOG_BUFFER_SIZE = int(os.getenv("LOG_BUFFER_SIZE", "1000"))
 # so we rewrite the whole file only once every LOG_BUFFER_SIZE records rather
 # than on every single log line.
 _MAX_LINES = LOG_BUFFER_SIZE * 2
-_LOG_PATH = os.getenv("AGENT_LOG_FILE") or persistent_file("agent_logs.jsonl")
+_LOG_PATH = persistent_file("agent_logs.jsonl", os.getenv("AGENT_LOG_FILE"))
 # In-process guard around the append / trim. Appends are line-sized so the OS
 # keeps them whole for readers in other processes; the atomic os.replace on trim
 # keeps the file consistent.
