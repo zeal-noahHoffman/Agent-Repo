@@ -30,7 +30,11 @@ a PR can't quietly run away, without pretending to be transactionally exact.
 from threading import Lock
 
 from app.config import Config
+from app.utils import settings_store
 from app.utils.cost_store import spend_for_group
+
+# Settings-store key for the dashboard-editable per-PR cap override.
+PR_BUDGET_KEY = "pr_max_budget_usd"
 
 
 class BudgetExceededError(RuntimeError):
@@ -38,16 +42,26 @@ class BudgetExceededError(RuntimeError):
 
 
 class BudgetTracker:
-    def __init__(self, cap_usd: float, seed_fn=None):
-        # cap_usd <= 0 disables the per-PR cap (only the per-run cap applies).
-        self.cap = cap_usd
+    def __init__(self, cap_source, seed_fn=None):
+        # cap_source is a float OR a zero-arg callable returning the current cap, so the
+        # process-wide tracker can pick up dashboard edits live. A cap <= 0 disables the
+        # per-PR cap (only the per-run cap applies).
+        self._cap_source = cap_source
         # seed_fn(group) -> prior spend, read once per group from the cost store.
         self._seed_fn = seed_fn
         self._used: dict[str, float] = {}  # group -> reserved + settled spend
         self._lock = Lock()
 
+    @property
+    def cap(self) -> float:
+        src = self._cap_source
+        try:
+            return float(src() if callable(src) else src)
+        except Exception:
+            return 0.0
+
     def enabled(self) -> bool:
-        return self.cap and self.cap > 0
+        return self.cap > 0
 
     def _ensure_seeded(self, group: str) -> None:
         if group not in self._used:
@@ -66,16 +80,17 @@ class BudgetTracker:
         per-run cap unchanged. Raises ``BudgetExceededError`` if the group is already
         out of budget.
         """
-        if not group or not self.enabled():
+        cap = self.cap  # snapshot once: the property re-reads the live setting each access
+        if not group or cap <= 0:
             return per_run_cap
         with self._lock:
             self._ensure_seeded(group)
             used = self._used[group]
-            remaining = self.cap - used
+            remaining = cap - used
             if remaining <= 1e-9:
                 raise BudgetExceededError(
-                    f"PR budget of ${self.cap:.2f} for '{group}' is exhausted "
-                    f"(${used:.4f} already spent). Raise PR_MAX_BUDGET_USD or split the work."
+                    f"PR budget of ${cap:.2f} for '{group}' is exhausted "
+                    f"(${used:.4f} already spent). Raise the per-PR budget or split the work."
                 )
             granted = min(per_run_cap, remaining)
             self._used[group] = used + granted  # pessimistic: count the full grant now
@@ -98,9 +113,37 @@ class BudgetTracker:
             return self._used.get(group, 0.0)
 
 
-# Process-wide tracker shared by every flow, keyed by budget group. Seeds from the
-# durable cost store so a cap is consistent across Slack turns and restarts.
-tracker = BudgetTracker(Config.PR_MAX_BUDGET_USD, seed_fn=spend_for_group)
+# Effective per-PR cap: a dashboard-set override in the settings store wins; otherwise
+# the PR_MAX_BUDGET_USD env default. Read live on every reserve, so a change in the
+# Budget tab applies to the next run without a redeploy.
+def effective_cap() -> float:
+    override = settings_store.get_float(PR_BUDGET_KEY)
+    return override if override is not None else Config.PR_MAX_BUDGET_USD
+
+
+def default_cap() -> float:
+    """The env-configured default, ignoring any dashboard override."""
+    return Config.PR_MAX_BUDGET_USD
+
+
+def is_overridden() -> bool:
+    return settings_store.get_float(PR_BUDGET_KEY) is not None
+
+
+def set_cap(value: float) -> bool:
+    """Persist a dashboard-set per-PR cap override (>= 0; 0 disables the cap)."""
+    return settings_store.set(PR_BUDGET_KEY, float(value))
+
+
+def clear_cap() -> bool:
+    """Drop the override so the cap falls back to the env default."""
+    return settings_store.delete(PR_BUDGET_KEY)
+
+
+# Process-wide tracker shared by every flow, keyed by budget group. Reads the effective
+# cap live, and seeds each group from the durable cost store so a cap is consistent
+# across Slack turns and restarts.
+tracker = BudgetTracker(effective_cap, seed_fn=spend_for_group)
 
 
 def reserve(group: str | None, per_run_cap: float) -> float:

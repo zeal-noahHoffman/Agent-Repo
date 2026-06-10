@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Sidebar from "./Sidebar.jsx";
 import Analytics from "./Analytics.jsx";
+import Budget from "./Budget.jsx";
 
 // The agent writes structured log lines to stdout (see app/utils/logger.py)
 // and exposes them at /api/logs. This dashboard polls that endpoint.
@@ -226,10 +227,14 @@ export default function App() {
         status={status}
       />
       <div className="content">
-        {view === "logs" ? (
+        {view === "logs" && (
           <LogsView logs={logs} status={status} usingSample={usingSample} />
-        ) : (
+        )}
+        {view === "analytics" && (
           <Analytics logs={logs} costEvents={costEvents} prBudget={prBudget} now={Date.now()} />
+        )}
+        {view === "budget" && (
+          <Budget apiBase={API_BASE} onSaved={fetchCosts} />
         )}
       </div>
     </div>

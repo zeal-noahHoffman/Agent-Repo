@@ -15,7 +15,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from app.config import Config
+from app.utils import budget
 from app.utils.cost_store import get_cost_events
 from app.utils.logger import get_logs, setup_logger
 
@@ -46,14 +46,26 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        # Allow the dashboard to be hosted from a different origin in dev.
+        # Allow the dashboard to be hosted from a different origin in dev (incl. the
+        # Budget tab's POST, which needs these on the preflight + the response).
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
 
     def _send_json(self, payload, status: int = 200) -> None:
         self._send(json.dumps(payload).encode(), "application/json", status)
+
+    def _budget_state(self) -> dict:
+        """Current per-PR budget: the effective cap, the env default, and whether a
+        dashboard override is in force. 0 means the per-PR cap is disabled."""
+        return {
+            "prBudgetUsd": budget.effective_cap(),
+            "defaultUsd": budget.default_cap(),
+            "isOverride": budget.is_overridden(),
+        }
 
     # --- routing ----------------------------------------------------------
 
@@ -63,17 +75,56 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json({"logs": get_logs()})
         elif path == "/api/costs":
             # Durable per-run cost history for the dashboard's Analytics page, plus the
-            # per-PR budget cap so the dashboard can show spend against it.
+            # effective per-PR cap so the Cost-by-PR bars show spend against the real limit.
             self._send_json({
                 "events": get_cost_events(),
-                "prBudgetUsd": Config.PR_MAX_BUDGET_USD,
+                "prBudgetUsd": budget.effective_cap(),
             })
+        elif path == "/api/budget":
+            self._send_json(self._budget_state())
         elif path in ("/api/health", "/healthz"):
             self._send_json({"status": "ok"})
         else:
             self._serve_static(path)
 
     do_HEAD = do_GET
+
+    def do_OPTIONS(self) -> None:  # noqa: N802 — CORS preflight for the Budget POST
+        self._send(b"", "text/plain", status=204)
+
+    def do_POST(self) -> None:  # noqa: N802 (http.server API)
+        path = self.path.split("?", 1)[0]
+        if path != "/api/budget":
+            self._send_json({"error": "not found"}, status=404)
+            return
+
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+            payload = json.loads(self.rfile.read(length) or b"{}")
+        except (ValueError, TypeError):
+            self._send_json({"error": "invalid JSON body"}, status=400)
+            return
+
+        # Clearing the override (reset to env default).
+        if payload.get("reset") or payload.get("prBudgetUsd") is None:
+            budget.clear_cap()
+            self._send_json(self._budget_state())
+            return
+
+        try:
+            value = float(payload["prBudgetUsd"])
+        except (TypeError, ValueError):
+            self._send_json({"error": "prBudgetUsd must be a number"}, status=400)
+            return
+        if value < 0:
+            self._send_json({"error": "prBudgetUsd must be >= 0 (0 disables the cap)"}, status=400)
+            return
+
+        if not budget.set_cap(value):
+            self._send_json({"error": "could not persist setting"}, status=500)
+            return
+        logger.info(f"Per-PR budget cap set to ${value:.2f} via dashboard")
+        self._send_json(self._budget_state())
 
     def _serve_static(self, path: str) -> None:
         if not _FRONTEND_DIST.is_dir():

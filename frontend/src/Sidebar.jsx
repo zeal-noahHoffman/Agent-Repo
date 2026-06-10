@@ -24,6 +24,15 @@ function AnalyticsIcon() {
   );
 }
 
+function BudgetIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M14.5 9.5a2.5 2 0 0 0-2.5-1.5c-1.4 0-2.5.7-2.5 1.8 0 2.7 5 1.3 5 4 0 1.2-1.1 1.9-2.5 1.9a2.6 2 0 0 1-2.5-1.5M12 6.5v1.5M12 16v1.5" />
+    </svg>
+  );
+}
+
 function CollapseIcon({ collapsed }) {
   return (
     <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -35,6 +44,7 @@ function CollapseIcon({ collapsed }) {
 const NAV = [
   { id: "logs", label: "Logs", Icon: LogsIcon },
   { id: "analytics", label: "Analytics", Icon: AnalyticsIcon },
+  { id: "budget", label: "Budget", Icon: BudgetIcon },
 ];
 
 export default function Sidebar({ view, onNavigate, collapsed, onToggle, robotState, status }) {

@@ -565,3 +565,95 @@ body {
   color: var(--muted);
   font-size: 11px;
 }
+
+/* Budget tab form */
+.budgetform {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.budgetform__label {
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.budgetform__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+  max-width: 220px;
+}
+
+.budgetform__row:focus-within {
+  border-color: var(--accent);
+}
+
+.budgetform__prefix {
+  color: var(--muted);
+  font-size: 18px;
+}
+
+.budgetform__input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--text);
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  width: 100%;
+}
+
+/* Hide number input spinners for a cleaner look */
+.budgetform__input::-webkit-outer-spin-button,
+.budgetform__input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.budgetform__input {
+  -moz-appearance: textfield;
+}
+
+.budgetform__hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.budgetform__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.budgetform__actions .chip {
+  padding: 7px 14px;
+}
+
+.btn:disabled,
+.chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.budgetform__error {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--error);
+}
+
+.budgetform__saved {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: #3fb950;
+}
