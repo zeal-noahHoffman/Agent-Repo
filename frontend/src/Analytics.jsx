@@ -159,11 +159,63 @@ function PhaseSplit({ phases, total }) {
   );
 }
 
+function PhaseDetail({ p }) {
+  return (
+    <section className="panel">
+      <h3>
+        {p.label} — {formatUsd(p.total)}
+        <span className="panel__sub"> · {p.blurb} · {p.runCount} run{p.runCount === 1 ? "" : "s"}</span>
+      </h3>
+      <div className="analytics__cols">
+        <div>
+          <h4 className="subhead">By ticket</h4>
+          <table className="datatable">
+            <thead>
+              <tr><th>Ticket</th><th className="num">Cost</th></tr>
+            </thead>
+            <tbody>
+              {p.tickets.map((t) => (
+                <tr key={t.ticket}>
+                  <td className="mono">{t.ticket}</td>
+                  <td className="num strong">{formatUsd(t.total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div>
+          <h4 className="subhead">Runs</h4>
+          <table className="datatable">
+            <thead>
+              <tr><th>Time</th><th>Ticket</th><th className="num">Cost</th></tr>
+            </thead>
+            <tbody>
+              {p.runs.map((r, i) => (
+                <tr key={`${r.ts}-${i}`}>
+                  <td className="muted mono">{r.ts || "—"}</td>
+                  <td className="mono">{r.ticket}</td>
+                  <td className="num strong">{formatUsd(r.cost)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function PhaseView({ a }) {
   const phases = a.phases;
   const total = a.grandTotal;
   const ranked = [...phases].filter((p) => p.category !== "Other").sort((a, b) => b.total - a.total);
   const top = ranked[0];
+
+  // Tabbed phase detail — default to Planning (Phase 1) when present, else the first.
+  const [active, setActive] = useState(() =>
+    phases.some((p) => p.category === "Planning") ? "Planning" : phases[0]?.category
+  );
+  const current = phases.find((p) => p.category === active) || phases[0];
 
   return (
     <>
@@ -188,49 +240,19 @@ function PhaseView({ a }) {
         <PhaseSplit phases={phases} total={total} />
       </section>
 
-      {phases.map((p) => (
-        <section className="panel" key={p.category}>
-          <h3>
-            {p.label} — {formatUsd(p.total)}
-            <span className="panel__sub"> · {p.blurb} · {p.runCount} run{p.runCount === 1 ? "" : "s"}</span>
-          </h3>
-          <div className="analytics__cols">
-            <div>
-              <h4 className="subhead">By ticket</h4>
-              <table className="datatable">
-                <thead>
-                  <tr><th>Ticket</th><th className="num">Cost</th></tr>
-                </thead>
-                <tbody>
-                  {p.tickets.map((t) => (
-                    <tr key={t.ticket}>
-                      <td className="mono">{t.ticket}</td>
-                      <td className="num strong">{formatUsd(t.total)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div>
-              <h4 className="subhead">Runs</h4>
-              <table className="datatable">
-                <thead>
-                  <tr><th>Time</th><th>Ticket</th><th className="num">Cost</th></tr>
-                </thead>
-                <tbody>
-                  {p.runs.map((r, i) => (
-                    <tr key={`${r.ts}-${i}`}>
-                      <td className="muted mono">{r.ts || "—"}</td>
-                      <td className="mono">{r.ticket}</td>
-                      <td className="num strong">{formatUsd(r.cost)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </section>
-      ))}
+      <div className="subtabs">
+        {phases.map((p) => (
+          <button
+            key={p.category}
+            className={`chip ${active === p.category ? "chip--active" : ""}`}
+            onClick={() => setActive(p.category)}
+          >
+            {p.label} · {formatUsd(p.total)}
+          </button>
+        ))}
+      </div>
+
+      {current && <PhaseDetail p={current} />}
     </>
   );
 }
