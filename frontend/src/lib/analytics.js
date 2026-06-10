@@ -37,6 +37,7 @@ export function runsFromEvents(events) {
   return (events || []).map((e) => ({
     ticket: e.ticket || UNKNOWN_TICKET,
     phase: e.phase ?? null,
+    runKind: e.runKind || null,
     cost: Number(e.cost) || 0,
     ts: e.ts || "",
     millis: e.millis != null ? e.millis : tsToMillis(e.ts),
@@ -140,6 +141,59 @@ function perTicket(runs) {
     .sort((a, b) => b.total - a.total);
 }
 
+// The agent's two phases, in the user's terms. Planning is LOOM (phase 1) plus the
+// batch plan-synthesis run; Coding is the build/PR phase (phase 2) plus merge-conflict
+// resolution, which also edits code. Runs we can't classify land in "Other".
+export const PHASE_META = {
+  Planning: { label: "Planning", blurb: "LOOM planning (Phase 1) + batch synthesis" },
+  Coding: { label: "Coding", blurb: "Implementation & PR (Phase 2) + conflict fixes" },
+  Other: { label: "Other", blurb: "Runs with no phase recorded" },
+};
+const PHASE_ORDER = ["Planning", "Coding", "Other"];
+
+export function categorizeRun(run) {
+  if (run.phase === 1) return "Planning";
+  if (run.phase === 2) return "Coding";
+  const k = run.runKind;
+  if (k === "plan" || k === "synthesis") return "Planning";
+  if (k === "build" || k === "conflict") return "Coding";
+  return "Other";
+}
+
+// Group runs into Planning vs Coding (vs Other). Each category carries its total cost,
+// the runs in it, and a per-ticket cost breakdown within that phase.
+function byPhase(runs) {
+  const cats = new Map();
+  for (const r of runs) {
+    const cat = categorizeRun(r);
+    let e = cats.get(cat);
+    if (!e) {
+      e = { category: cat, total: 0, runCount: 0, _tickets: new Map(), runs: [] };
+      cats.set(cat, e);
+    }
+    e.total += r.cost;
+    e.runCount += 1;
+    e.runs.push(r);
+    const tkey = r.ticket || UNKNOWN_TICKET;
+    e._tickets.set(tkey, (e._tickets.get(tkey) || 0) + r.cost);
+  }
+  return PHASE_ORDER.filter((c) => cats.has(c)).map((c) => {
+    const e = cats.get(c);
+    const tickets = [...e._tickets.entries()]
+      .map(([ticket, total]) => ({ ticket, total }))
+      .sort((a, b) => b.total - a.total);
+    return {
+      category: c,
+      ...PHASE_META[c],
+      total: e.total,
+      runCount: e.runCount,
+      ticketCount: tickets.length,
+      tickets,
+      runs: [...e.runs].reverse(), // most recent first
+    };
+  });
+}
+
 // Group runs by the PR (budget group) they billed to. A batch PR collapses several
 // tickets into one row; a single-ticket PR is just that ticket. Runs with no group
 // (older events, or before the per-PR budget feature) are skipped here.
@@ -170,6 +224,7 @@ export function buildAnalytics(runs, now = Date.now()) {
     runs: [...runs].reverse(), // most recent first for the per-run table
     tickets: perTicket(runs),
     prs: perPr(runs),
+    phases: byPhase(runs),
     grandTotal,
     runCount: runs.length,
     avgRun: runs.length ? grandTotal / runs.length : 0,
