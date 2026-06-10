@@ -229,7 +229,11 @@ class BatchScheduler:
 
         def plan_one(key: str) -> None:
             try:
-                res = self.orch.run_phase1(key, base_ref=integration_branch)
+                # The integration branch is this batch's one PR — every run in the
+                # batch shares it as the budget group so the per-PR cap covers the whole PR.
+                res = self.orch.run_phase1(
+                    key, base_ref=integration_branch, budget_group=integration_branch
+                )
             except Exception as e:           # never let one ticket kill the planning pass
                 logger.exception(f"Planning {key} raised")
                 res = {"success": False, "error": str(e)}
@@ -248,7 +252,9 @@ class BatchScheduler:
 
         synthesis = ""
         if planned:
-            synthesis = self.orch.synthesize_batch_plan(planned, tickets, plans, dag_lists)
+            synthesis = self.orch.synthesize_batch_plan(
+                planned, tickets, plans, dag_lists, budget_group=integration_branch
+            )
 
         emit("batch_planned", integration_branch=integration_branch,
              planned=list(planned), synthesis=synthesis, dag=dag_lists)
@@ -328,7 +334,8 @@ class BatchScheduler:
             emit("ticket_start", key=key, base_ref=base)
             try:
                 result = self.orch.build_ticket(
-                    key, plan=plans[key], ticket=tickets[key], base_ref=base
+                    key, plan=plans[key], ticket=tickets[key], base_ref=base,
+                    budget_group=integration_branch,
                 )
             except Exception as e:               # never let one ticket kill the batch
                 logger.exception(f"Ticket {key} raised")
@@ -480,7 +487,8 @@ class BatchScheduler:
                     continue
 
                 emit("merge_conflict", key=key, files=list(conflicts))
-                if self._resolve_one(worktree, key, conflicts, merged, results, tickets):
+                if self._resolve_one(worktree, key, conflicts, merged, results, tickets,
+                                     budget_group=integration_branch):
                     merged.append(key)
                     emit("merge_resolved", key=key, files=list(conflicts))
                 else:
@@ -539,7 +547,8 @@ class BatchScheduler:
     # ------------------------------------------------------------------
 
     def _resolve_one(self, worktree: str, key: str, conflicts: list[str],
-                     already_merged: list[str], results: dict, tickets: dict) -> bool:
+                     already_merged: list[str], results: dict, tickets: dict,
+                     budget_group: str | None = None) -> bool:
         """Have the resolution agent reconcile a conflicted merge, then verify and seal it.
 
         Returns True if the conflict was resolved (no markers remain) and the merge commit
@@ -554,6 +563,7 @@ class BatchScheduler:
                 context_tickets=context_tickets,
                 tickets=tickets,
                 results=results,
+                budget_group=budget_group,
             )
             logger.info(f"Conflict agent for {key} finished: {summary[:200]}")
         except Exception:

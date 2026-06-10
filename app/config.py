@@ -12,8 +12,15 @@ class Config:
 
     # Coding agent
     AGENT_MAX_TURNS: int = int(os.getenv("AGENT_MAX_TURNS", "60"))
-    # Hard spend cap per ticket (one agent run). Not a lifetime cap.
+    # Hard spend cap for a SINGLE agent run (one query() call). Not a lifetime cap.
     AGENT_MAX_BUDGET_USD: float = float(os.getenv("AGENT_MAX_BUDGET_USD", "5.0"))
+    # Cumulative spend cap for everything that goes into ONE pull request — a single
+    # ticket's plan+build, or a whole batch's plans+builds+synthesis+conflict fixes.
+    # Each agent run is granted min(AGENT_MAX_BUDGET_USD, remaining PR budget); once a
+    # PR's runs have spent this much, further runs for that PR are refused. Set to 0 to
+    # disable the per-PR cap (only the per-run cap applies). Backed by the cost store, so
+    # it survives the plan→approve→build gate and process restarts.
+    PR_MAX_BUDGET_USD: float = float(os.getenv("PR_MAX_BUDGET_USD", "20.0"))
     # Max tickets built concurrently in a batch. Independent tickets fan out up to this
     # cap; the rest queue. Bounds API spend, CPU, and rate-limit exposure.
     AGENT_MAX_CONCURRENCY: int = int(os.getenv("AGENT_MAX_CONCURRENCY", "3"))

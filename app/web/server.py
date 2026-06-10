@@ -15,6 +15,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from app.config import Config
 from app.utils.cost_store import get_cost_events
 from app.utils.logger import get_logs, setup_logger
 
@@ -61,8 +62,12 @@ class _Handler(BaseHTTPRequestHandler):
         if path == "/api/logs":
             self._send_json({"logs": get_logs()})
         elif path == "/api/costs":
-            # Durable per-run cost history for the dashboard's Analytics page.
-            self._send_json({"events": get_cost_events()})
+            # Durable per-run cost history for the dashboard's Analytics page, plus the
+            # per-PR budget cap so the dashboard can show spend against it.
+            self._send_json({
+                "events": get_cost_events(),
+                "prBudgetUsd": Config.PR_MAX_BUDGET_USD,
+            })
         elif path in ("/api/health", "/healthz"):
             self._send_json({"status": "ok"})
         else:

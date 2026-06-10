@@ -29,7 +29,25 @@ function WeekChart({ series }) {
   );
 }
 
-export default function Analytics({ logs, costEvents, now }) {
+// A PR's spend against its budget cap: a thin bar that turns amber past 75% and
+// red once the cap is hit.
+function BudgetBar({ total, cap }) {
+  if (!cap || cap <= 0) {
+    return <span className="muted">{formatUsd(total)} <span className="budgetbar__nocap">· no cap</span></span>;
+  }
+  const pct = Math.min((total / cap) * 100, 100);
+  const level = total >= cap ? "over" : pct >= 75 ? "warn" : "ok";
+  return (
+    <div className="budgetbar" title={`${formatUsd(total)} of ${formatUsd(cap)} (${Math.round((total / cap) * 100)}%)`}>
+      <div className="budgetbar__track">
+        <div className={`budgetbar__fill budgetbar__fill--${level}`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="budgetbar__text">{formatUsd(total)} / {formatUsd(cap)}</span>
+    </div>
+  );
+}
+
+export default function Analytics({ logs, costEvents, prBudget, now }) {
   // Prefer the durable cost store (all-time, persisted, timezone-correct). Fall
   // back to parsing the log buffer until the store has accumulated events —
   // e.g. right after first deploying this feature.
@@ -67,6 +85,32 @@ export default function Analytics({ logs, costEvents, now }) {
             <h3>Weekly recap</h3>
             <WeekChart series={a.weekSeries} />
           </section>
+
+          {a.prs.length > 0 && (
+            <section className="panel">
+              <h3>
+                Cost by PR
+                {prBudget > 0 && (
+                  <span className="panel__sub"> · {formatUsd(prBudget)} budget cap per PR</span>
+                )}
+              </h3>
+              <table className="datatable">
+                <thead>
+                  <tr><th>Pull request</th><th>Tickets</th><th className="num">Runs</th><th>Budget</th></tr>
+                </thead>
+                <tbody>
+                  {a.prs.map((pr) => (
+                    <tr key={pr.group}>
+                      <td className="mono">{pr.group}</td>
+                      <td className="muted">{pr.tickets.length ? pr.tickets.join(", ") : "—"}</td>
+                      <td className="num">{pr.runs}</td>
+                      <td className="budgetbar__cell"><BudgetBar total={pr.total} cap={prBudget} /></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </section>
+          )}
 
           <div className="analytics__cols">
             <section className="panel">

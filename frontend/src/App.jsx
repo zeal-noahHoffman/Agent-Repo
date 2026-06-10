@@ -147,6 +147,7 @@ function LogsView({ logs, status, usingSample }) {
 export default function App() {
   const [logs, setLogs] = useState([]);
   const [costEvents, setCostEvents] = useState([]);
+  const [prBudget, setPrBudget] = useState(0);
   const [status, setStatus] = useState("connecting"); // connecting | live | offline
   const [usingSample, setUsingSample] = useState(false);
   const [view, setView] = useState("logs"); // logs | analytics
@@ -181,6 +182,7 @@ export default function App() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setCostEvents(Array.isArray(data) ? data : data.events || []);
+      setPrBudget(typeof data.prBudgetUsd === "number" ? data.prBudgetUsd : 0);
     } catch {
       setCostEvents([]);
     }
@@ -227,7 +229,7 @@ export default function App() {
         {view === "logs" ? (
           <LogsView logs={logs} status={status} usingSample={usingSample} />
         ) : (
-          <Analytics logs={logs} costEvents={costEvents} now={Date.now()} />
+          <Analytics logs={logs} costEvents={costEvents} prBudget={prBudget} now={Date.now()} />
         )}
       </div>
     </div>

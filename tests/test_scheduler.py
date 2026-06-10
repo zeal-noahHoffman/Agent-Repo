@@ -132,7 +132,7 @@ class FakeOrchestrator:
         self.resolve_calls = []
 
     def resolve_merge_conflicts(self, worktree_path, merging_key, conflicted_files,
-                                context_tickets, tickets, results):
+                                context_tickets, tickets, results, budget_group=None):
         self.resolve_calls.append({
             "key": merging_key, "context": list(context_tickets),
             "files": list(conflicted_files),
@@ -142,7 +142,7 @@ class FakeOrchestrator:
         return f"resolved {merging_key}"
 
     # ---- plan phase ----
-    def run_phase1(self, key, base_ref=None):
+    def run_phase1(self, key, base_ref=None, budget_group=None):
         # Planning is read-only and always off the integration branch in the new flow.
         self.planned_base_refs[key] = base_ref
         if key in self.plan_fail:
@@ -151,12 +151,12 @@ class FakeOrchestrator:
                 "branch_name": f"agent/{key.lower()}",
                 "worktree_path": f"/wt/{key.lower()}", "ticket": {"key": key}}
 
-    def synthesize_batch_plan(self, ticket_keys, tickets, plans, dag):
+    def synthesize_batch_plan(self, ticket_keys, tickets, plans, dag, budget_group=None):
         self.synthesized = list(ticket_keys)
         return "combined synthesis: " + ", ".join(ticket_keys)
 
     # ---- build phase ----
-    def build_ticket(self, key, plan=None, ticket=None, base_ref=None):
+    def build_ticket(self, key, plan=None, ticket=None, base_ref=None, budget_group=None):
         with self._lock:
             self._active += 1
             self.max_active = max(self.max_active, self._active)

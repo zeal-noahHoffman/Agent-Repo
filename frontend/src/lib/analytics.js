@@ -40,6 +40,9 @@ export function runsFromEvents(events) {
     cost: Number(e.cost) || 0,
     ts: e.ts || "",
     millis: e.millis != null ? e.millis : tsToMillis(e.ts),
+    // The PR this run billed to: a ticket key (single-ticket PR) or an
+    // integration branch (batch PR). Only present on cost-store events.
+    budgetGroup: e.budgetGroup || null,
   }));
 }
 
@@ -137,6 +140,26 @@ function perTicket(runs) {
     .sort((a, b) => b.total - a.total);
 }
 
+// Group runs by the PR (budget group) they billed to. A batch PR collapses several
+// tickets into one row; a single-ticket PR is just that ticket. Runs with no group
+// (older events, or before the per-PR budget feature) are skipped here.
+function perPr(runs) {
+  const map = new Map();
+  for (const r of runs) {
+    if (!r.budgetGroup) continue;
+    const entry =
+      map.get(r.budgetGroup) ||
+      { group: r.budgetGroup, total: 0, runs: 0, tickets: new Set() };
+    entry.total += r.cost;
+    entry.runs += 1;
+    if (r.ticket && r.ticket !== UNKNOWN_TICKET) entry.tickets.add(r.ticket);
+    map.set(r.budgetGroup, entry);
+  }
+  return [...map.values()]
+    .map((e) => ({ ...e, tickets: [...e.tickets] }))
+    .sort((a, b) => b.total - a.total);
+}
+
 // Build the full analytics model the Analytics view renders from a list of runs
 // (from runsFromEvents or extractRuns). `now` is injected so the caller controls
 // the relative-window anchor (real Date.now() at render).
@@ -146,6 +169,7 @@ export function buildAnalytics(runs, now = Date.now()) {
   return {
     runs: [...runs].reverse(), // most recent first for the per-run table
     tickets: perTicket(runs),
+    prs: perPr(runs),
     grandTotal,
     runCount: runs.length,
     avgRun: runs.length ? grandTotal / runs.length : 0,

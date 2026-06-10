@@ -8,6 +8,7 @@ from app.config import Config
 from app.agent.orchestrator import Orchestrator
 from app.agent.scheduler import BatchScheduler
 from app.slack_bot import batch_store
+from app.utils import budget
 from app.utils.logger import setup_logger
 
 logger = setup_logger("slack_bot")
@@ -35,6 +36,14 @@ _state_lock = threading.Lock()
 
 def _allowed(channel: str) -> bool:
     return not Config.SLACK_ALLOWED_CHANNELS or channel in Config.SLACK_ALLOWED_CHANNELS
+
+
+def _spend_line(budget_group: str) -> str:
+    """A one-line PR spend report (' Spent $X of $Y PR budget.'), or '' if uncapped."""
+    spent = budget.spent(budget_group)
+    if not budget.tracker.enabled():
+        return f"\n*Spend:* ${spent:.4f} (no PR cap set)"
+    return f"\n*Spend:* ${spent:.4f} of ${budget.tracker.cap:.2f} PR budget"
 
 
 def _store_pending(ticket_key: str, state: dict) -> None:
@@ -69,7 +78,9 @@ _pop_pending_batch = batch_store.pop
 def _run_phase1(ticket_key: str, channel: str, thread_ts: str, say) -> None:
     """Run phase 1 in a background thread, then post the plan and wait for approval."""
     try:
-        result = orchestrator.run_phase1(ticket_key)
+        # A single-ticket PR's budget group is the ticket key — phase 1 (plan) and
+        # phase 2 (build) both bill to it, so the per-PR cap covers the whole PR.
+        result = orchestrator.run_phase1(ticket_key, budget_group=ticket_key)
     except Exception as e:
         logger.exception(f"Phase 1 exception for {ticket_key}")
         say(
@@ -124,6 +135,7 @@ def _run_phase2(ticket_key: str, state: dict, say) -> None:
             branch_name=state["branch_name"],
             worktree_path=state["worktree_path"],
             ticket=state["ticket"],
+            budget_group=ticket_key,
         )
     except Exception as e:
         logger.exception(f"Phase 2 exception for {ticket_key}")
@@ -138,7 +150,8 @@ def _run_phase2(ticket_key: str, state: dict, say) -> None:
             text=(
                 f"Done with `{ticket_key}`!\n\n"
                 f"*Branch:* `{result.get('branch', 'unknown')}`\n"
-                f"*PR:* {result.get('pr_url', 'N/A')}\n\n"
+                f"*PR:* {result.get('pr_url', 'N/A')}"
+                f"{_spend_line(ticket_key)}\n\n"
                 f"*Summary:*\n{result.get('summary', '')}"
             ),
             thread_ts=state["thread_ts"],
@@ -280,6 +293,7 @@ def _run_batch_build(state: dict) -> None:
     if integ.get("success"):
         merged = ", ".join(f"`{k}`" for k in integ["merged"])
         msg = f"*Success!* Combined PR opened — {merged}\n{integ['pr_url']}"
+        msg += _spend_line(integ["integration_branch"])
         if integ.get("merge_failed") or integ.get("excluded"):
             left_out = sorted(set(integ.get("merge_failed", [])) | set(integ.get("excluded", [])))
             msg += "\n_Not included (see dashboard for details): " + ", ".join(

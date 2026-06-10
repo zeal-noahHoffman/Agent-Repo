@@ -22,6 +22,7 @@ from app.agent.prompts import (
 )
 from app.utils.logger import setup_logger
 from app.utils.cost_store import record_cost
+from app.utils import budget
 
 logger = setup_logger("orchestrator")
 
@@ -50,7 +51,9 @@ class Orchestrator:
     # Phase 1 — LOOM Phases 0–4: explore and plan
     # ------------------------------------------------------------------
 
-    def run_phase1(self, ticket_key: str, base_ref: str | None = None) -> dict:
+    def run_phase1(
+        self, ticket_key: str, base_ref: str | None = None, budget_group: str | None = None
+    ) -> dict:
         """
         Fetch the ticket, create a branch + worktree, run the planning agent,
         and persist the exec-plan as a Jira comment.
@@ -101,6 +104,7 @@ class Orchestrator:
                     ticket_key=ticket_key,
                     phase=1,
                     run_kind="plan",
+                    budget_group=budget_group,
                 )
             )
 
@@ -137,6 +141,7 @@ class Orchestrator:
         worktree_path: str,
         ticket: dict,
         open_pr: bool = True,
+        budget_group: str | None = None,
     ) -> dict:
         """
         Run the building agent against the approved plan, commit the result,
@@ -163,6 +168,7 @@ class Orchestrator:
                     ticket_key=ticket_key,
                     phase=2,
                     run_kind="build",
+                    budget_group=budget_group,
                 )
             )
 
@@ -220,7 +226,9 @@ class Orchestrator:
     # Batch mode — plan + build in one shot, no human gate, no per-ticket PR
     # ------------------------------------------------------------------
 
-    def run_ticket(self, ticket_key: str, base_ref: str | None = None) -> dict:
+    def run_ticket(
+        self, ticket_key: str, base_ref: str | None = None, budget_group: str | None = None
+    ) -> dict:
         """Plan and build a single ticket end to end for batch execution.
 
         Runs phase 1 (plan) then phase 2 (build) with no human approval gate and no
@@ -232,7 +240,7 @@ class Orchestrator:
         Returns a dict with: success, branch_name, worktree_path, ticket, plan,
         summary, error (on failure).
         """
-        p1 = self.run_phase1(ticket_key, base_ref=base_ref)
+        p1 = self.run_phase1(ticket_key, base_ref=base_ref, budget_group=budget_group)
         if not p1.get("success"):
             return p1
 
@@ -243,6 +251,7 @@ class Orchestrator:
             worktree_path=p1["worktree_path"],
             ticket=p1["ticket"],
             open_pr=False,
+            budget_group=budget_group,
         )
 
         return {
@@ -256,7 +265,8 @@ class Orchestrator:
         }
 
     def build_ticket(
-        self, ticket_key: str, plan: str, ticket: dict, base_ref: str | None = None
+        self, ticket_key: str, plan: str, ticket: dict, base_ref: str | None = None,
+        budget_group: str | None = None,
     ) -> dict:
         """Build a ticket whose plan was produced in an earlier (separate) planning phase.
 
@@ -282,6 +292,7 @@ class Orchestrator:
             worktree_path=worktree_path,
             ticket=ticket,
             open_pr=False,
+            budget_group=budget_group,
         )
 
         return {
@@ -295,7 +306,8 @@ class Orchestrator:
         }
 
     def synthesize_batch_plan(
-        self, ticket_keys: list[str], tickets: dict, plans: dict, dag: dict
+        self, ticket_keys: list[str], tickets: dict, plans: dict, dag: dict,
+        budget_group: str | None = None,
     ) -> str:
         """Collapse several per-ticket LOOM plans into ONE combined planning message.
 
@@ -314,6 +326,7 @@ class Orchestrator:
                     max_turns=4,
                     max_budget_usd=max(Config.AGENT_MAX_BUDGET_USD / 4, 1.0),
                     run_kind="synthesis",
+                    budget_group=budget_group,
                 )
             )
         except Exception:
@@ -337,6 +350,7 @@ class Orchestrator:
         context_tickets: list[str],
         tickets: dict,
         results: dict,
+        budget_group: str | None = None,
     ) -> str:
         """Run an agent in the integration worktree to resolve git merge conflicts.
 
@@ -364,6 +378,7 @@ class Orchestrator:
                 max_budget_usd=Config.AGENT_MAX_BUDGET_USD,
                 ticket_key=merging_key,
                 run_kind="conflict",
+                budget_group=budget_group,
             )
         )
 
@@ -382,55 +397,78 @@ class Orchestrator:
         ticket_key: str | None = None,
         phase: int | None = None,
         run_kind: str | None = None,
+        budget_group: str | None = None,
     ) -> str:
+        # Reserve from this PR's cumulative budget; the SDK cap for this run is the
+        # smaller of the per-run cap and what's left in the PR budget. Raises
+        # BudgetExceededError (surfaced to the caller) if the PR is already tapped out.
+        granted = budget.reserve(budget_group, max_budget_usd)
+        clamped_by_pr = budget_group is not None and granted < max_budget_usd
+
         options = ClaudeAgentOptions(
             cwd=cwd,
             system_prompt=system_prompt,
             allowed_tools=allowed_tools,
             permission_mode="bypassPermissions",
             max_turns=max_turns,
-            max_budget_usd=max_budget_usd,
+            max_budget_usd=granted,
             model=Config.ANTHROPIC_MODEL,
         )
 
         summary = ""
-        async for message in query(prompt=prompt, options=options):
-            if isinstance(message, AssistantMessage):
-                for block in message.content:
-                    text = getattr(block, "text", None)
-                    if text:
-                        logger.info(f"[agent] {text[:300]}")
+        actual_cost = 0.0
+        try:
+            async for message in query(prompt=prompt, options=options):
+                if isinstance(message, AssistantMessage):
+                    for block in message.content:
+                        text = getattr(block, "text", None)
+                        if text:
+                            logger.info(f"[agent] {text[:300]}")
 
-            if isinstance(message, ResultMessage):
-                cost = getattr(message, "total_cost_usd", None)
-                if cost:
-                    logger.info(f"Agent run cost: ${cost:.4f}")
-                    # Also persist to the durable cost store so the dashboard's
-                    # analytics survive beyond the log ring buffer's trim window.
-                    record_cost(
-                        cost,
-                        ticket=ticket_key,
-                        phase=phase,
-                        run_kind=run_kind,
-                        model=Config.ANTHROPIC_MODEL,
-                    )
+                if isinstance(message, ResultMessage):
+                    cost = getattr(message, "total_cost_usd", None)
+                    if cost:
+                        actual_cost = cost
+                        logger.info(f"Agent run cost: ${cost:.4f}")
+                        # Persist to the durable cost store so the dashboard's analytics
+                        # survive beyond the log ring buffer's trim window, and so the
+                        # per-PR budget can read this PR's cumulative spend back.
+                        record_cost(
+                            cost,
+                            ticket=ticket_key,
+                            phase=phase,
+                            run_kind=run_kind,
+                            model=Config.ANTHROPIC_MODEL,
+                            budget_group=budget_group,
+                        )
 
-                if message.subtype == "success":
-                    summary = message.result or ""
-                elif message.subtype == "error_max_budget_usd":
-                    raise RuntimeError(
-                        f"Agent hit the spend cap of ${max_budget_usd:.2f}. "
-                        f"Raise AGENT_MAX_BUDGET_USD or split the ticket."
-                    )
-                elif message.subtype == "error_max_turns":
-                    raise RuntimeError(
-                        f"Agent hit the {max_turns}-turn limit. "
-                        f"Raise AGENT_MAX_TURNS or split the ticket."
-                    )
-                else:
-                    raise RuntimeError(
-                        f"Agent did not complete successfully (status: {message.subtype})."
-                    )
+                    if message.subtype == "success":
+                        summary = message.result or ""
+                    elif message.subtype == "error_max_budget_usd":
+                        # Distinguish the per-run cap from the PR cap clamping this run.
+                        if clamped_by_pr:
+                            raise RuntimeError(
+                                f"Agent stopped at ${granted:.2f} — the remaining PR budget "
+                                f"(cap ${budget.tracker.cap:.2f} for '{budget_group}'). "
+                                f"Raise PR_MAX_BUDGET_USD or split the work."
+                            )
+                        raise RuntimeError(
+                            f"Agent hit the spend cap of ${granted:.2f}. "
+                            f"Raise AGENT_MAX_BUDGET_USD or split the ticket."
+                        )
+                    elif message.subtype == "error_max_turns":
+                        raise RuntimeError(
+                            f"Agent hit the {max_turns}-turn limit. "
+                            f"Raise AGENT_MAX_TURNS or split the ticket."
+                        )
+                    else:
+                        raise RuntimeError(
+                            f"Agent did not complete successfully (status: {message.subtype})."
+                        )
+        finally:
+            # Reconcile the reservation with what the run actually spent, in every exit
+            # path (success, budget/turn error, or an exception mid-stream).
+            budget.settle(budget_group, granted, actual_cost)
 
         if not summary:
             raise RuntimeError("Agent returned no summary.")

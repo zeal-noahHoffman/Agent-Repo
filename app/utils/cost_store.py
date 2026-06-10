@@ -67,12 +67,21 @@ def _ensure_schema() -> None:
                     phase        INTEGER,
                     run_kind     TEXT,
                     cost_usd     REAL    NOT NULL,
-                    model        TEXT
+                    model        TEXT,
+                    budget_group TEXT
                 )
                 """
             )
+            # Migrate a DB created before budget_group existed (added when the per-PR
+            # budget cap landed) — additive, so older rows simply carry a NULL group.
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(cost_events)")}
+            if "budget_group" not in cols:
+                conn.execute("ALTER TABLE cost_events ADD COLUMN budget_group TEXT")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_cost_events_ts ON cost_events (ts_epoch_ms)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_cost_events_group ON cost_events (budget_group)"
             )
             conn.commit()
             _initialized = True
@@ -87,8 +96,14 @@ def record_cost(
     phase: int | None = None,
     run_kind: str | None = None,
     model: str | None = None,
+    budget_group: str | None = None,
 ) -> None:
-    """Persist one agent run's cost. Never raises into the caller."""
+    """Persist one agent run's cost. Never raises into the caller.
+
+    ``budget_group`` ties the run to the pull request it belongs to (a ticket key
+    for a single-ticket PR, the integration branch for a batch PR), so the per-PR
+    budget cap can read cumulative spend back from here.
+    """
     try:
         _ensure_schema()
         now_ms = int(time.time() * 1000)
@@ -98,9 +113,9 @@ def record_cost(
             try:
                 conn.execute(
                     "INSERT INTO cost_events "
-                    "(ts_epoch_ms, ts_display, ticket, phase, run_kind, cost_usd, model) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (now_ms, display, ticket, phase, run_kind, float(cost_usd), model),
+                    "(ts_epoch_ms, ts_display, ticket, phase, run_kind, cost_usd, model, budget_group) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (now_ms, display, ticket, phase, run_kind, float(cost_usd), model, budget_group),
                 )
                 conn.commit()
             finally:
@@ -108,6 +123,30 @@ def record_cost(
     except Exception:  # never let cost bookkeeping break an agent run
         # Best-effort: the same cost is still in the logs as a fallback source.
         pass
+
+
+def spend_for_group(budget_group: str) -> float:
+    """Total recorded spend for one PR's budget group. 0.0 if none / on error.
+
+    The per-PR budget tracker seeds itself from this so a cap holds even across the
+    plan→approve→build gate or a process restart mid-PR.
+    """
+    if not budget_group:
+        return 0.0
+    try:
+        _ensure_schema()
+        conn = _connect()
+        try:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(cost_usd), 0.0) AS total FROM cost_events "
+                "WHERE budget_group = ?",
+                (budget_group,),
+            ).fetchone()
+            return float(row["total"]) if row else 0.0
+        finally:
+            conn.close()
+    except Exception:
+        return 0.0
 
 
 def get_cost_events(limit: int = _MAX_EVENTS) -> list[dict]:
@@ -122,7 +161,7 @@ def get_cost_events(limit: int = _MAX_EVENTS) -> list[dict]:
         try:
             # Newest `limit` rows, then flip to oldest-first for the client.
             rows = conn.execute(
-                "SELECT ts_epoch_ms, ts_display, ticket, phase, run_kind, cost_usd, model "
+                "SELECT ts_epoch_ms, ts_display, ticket, phase, run_kind, cost_usd, model, budget_group "
                 "FROM cost_events ORDER BY id DESC LIMIT ?",
                 (limit,),
             ).fetchall()
@@ -140,6 +179,7 @@ def get_cost_events(limit: int = _MAX_EVENTS) -> list[dict]:
             "runKind": r["run_kind"],
             "cost": r["cost_usd"],
             "model": r["model"],
+            "budgetGroup": r["budget_group"],
         }
         for r in rows
     ]
