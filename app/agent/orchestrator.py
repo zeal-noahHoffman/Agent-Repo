@@ -21,6 +21,7 @@ from app.agent.prompts import (
     build_synthesis_prompt,
 )
 from app.utils.logger import setup_logger
+from app.utils.cost_store import record_cost
 
 logger = setup_logger("orchestrator")
 
@@ -97,6 +98,9 @@ class Orchestrator:
                     cwd=worktree_path,
                     max_turns=max(Config.AGENT_MAX_TURNS // 2, 10),
                     max_budget_usd=Config.AGENT_MAX_BUDGET_USD / 2,
+                    ticket_key=ticket_key,
+                    phase=1,
+                    run_kind="plan",
                 )
             )
 
@@ -156,6 +160,9 @@ class Orchestrator:
                     cwd=worktree_path,
                     max_turns=Config.AGENT_MAX_TURNS,
                     max_budget_usd=Config.AGENT_MAX_BUDGET_USD,
+                    ticket_key=ticket_key,
+                    phase=2,
+                    run_kind="build",
                 )
             )
 
@@ -306,6 +313,7 @@ class Orchestrator:
                     cwd=self.github.workspace_dir,
                     max_turns=4,
                     max_budget_usd=max(Config.AGENT_MAX_BUDGET_USD / 4, 1.0),
+                    run_kind="synthesis",
                 )
             )
         except Exception:
@@ -354,6 +362,8 @@ class Orchestrator:
                 cwd=worktree_path,
                 max_turns=Config.AGENT_MAX_TURNS,
                 max_budget_usd=Config.AGENT_MAX_BUDGET_USD,
+                ticket_key=merging_key,
+                run_kind="conflict",
             )
         )
 
@@ -369,6 +379,9 @@ class Orchestrator:
         cwd: str,
         max_turns: int,
         max_budget_usd: float,
+        ticket_key: str | None = None,
+        phase: int | None = None,
+        run_kind: str | None = None,
     ) -> str:
         options = ClaudeAgentOptions(
             cwd=cwd,
@@ -392,6 +405,15 @@ class Orchestrator:
                 cost = getattr(message, "total_cost_usd", None)
                 if cost:
                     logger.info(f"Agent run cost: ${cost:.4f}")
+                    # Also persist to the durable cost store so the dashboard's
+                    # analytics survive beyond the log ring buffer's trim window.
+                    record_cost(
+                        cost,
+                        ticket=ticket_key,
+                        phase=phase,
+                        run_kind=run_kind,
+                        model=Config.ANTHROPIC_MODEL,
+                    )
 
                 if message.subtype == "success":
                     summary = message.result or ""

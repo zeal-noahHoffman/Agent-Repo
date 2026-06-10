@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Robot from "./Robot.jsx";
+import Sidebar from "./Sidebar.jsx";
+import Analytics from "./Analytics.jsx";
 
 // The agent writes structured log lines to stdout (see app/utils/logger.py)
 // and exposes them at /api/logs. This dashboard polls that endpoint.
@@ -10,6 +11,7 @@ import Robot from "./Robot.jsx";
 // deployed as its own service. The agent sends CORS headers for this.
 const API_BASE = (import.meta.env.VITE_API_BASE || "").replace(/\/$/, "");
 const LOGS_ENDPOINT = `${API_BASE}/api/logs`;
+const COSTS_ENDPOINT = `${API_BASE}/api/costs`;
 const POLL_INTERVAL_MS = 3000;
 
 // Sample lines shown before the backend log endpoint is connected, so the
@@ -18,21 +20,21 @@ const SAMPLE_LOGS = [
   { ts: "2026-05-31 09:14:02", logger: "main", level: "INFO", message: "Agent Bot starting up..." },
   { ts: "2026-05-31 09:14:02", logger: "slack_bot", level: "INFO", message: "Starting Slack bot in Socket Mode..." },
   { ts: "2026-05-31 09:15:31", logger: "slack_bot", level: "INFO", message: "On it! Running LOOM planning for PROJ-123." },
+  { ts: "2026-05-31 09:15:35", logger: "orchestrator", level: "INFO", message: "Phase 1 start: PROJ-123" },
+  { ts: "2026-05-31 09:16:40", logger: "orchestrator", level: "INFO", message: "Agent run cost: $0.2143" },
   { ts: "2026-05-31 09:16:48", logger: "orchestrator", level: "INFO", message: "Phase 1 complete — exec plan generated for PROJ-123." },
   { ts: "2026-05-31 09:16:48", logger: "slack_bot", level: "INFO", message: "Waiting for approval on PROJ-123 (plan_message_ts=1717146...)." },
   { ts: "2026-05-31 09:18:10", logger: "slack_bot", level: "INFO", message: "Reaction approval received for PROJ-123 (:white_check_mark:)." },
+  { ts: "2026-05-31 09:18:14", logger: "orchestrator", level: "INFO", message: "Phase 2 start: PROJ-123" },
   { ts: "2026-05-31 09:21:55", logger: "github_client", level: "WARNING", message: "Branch already exists, reusing feature/PROJ-123." },
+  { ts: "2026-05-31 09:24:08", logger: "orchestrator", level: "INFO", message: "Agent run cost: $0.7357" },
   { ts: "2026-05-31 09:24:12", logger: "orchestrator", level: "INFO", message: "Phase 2 complete — PR opened for PROJ-123." },
 ];
 
 const LEVELS = ["ALL", "INFO", "WARNING", "ERROR", "DEBUG"];
 
-const ROBOT_LABELS = {
-  idle: "Idle — waiting for a task",
-  thinking: "Thinking…",
-  working: "Working…",
-  waiting: "Waiting on you",
-};
+// Below this viewport width the sidebar auto-collapses to icons-only.
+const COLLAPSE_BREAKPOINT = 900;
 
 // Infer the robot's mood from the most recent log line. Mirrors the agent's
 // real lifecycle: plan (thinking) → await approval (waiting) → implement
@@ -66,40 +68,12 @@ function normalize(raw) {
   };
 }
 
-export default function App() {
-  const [logs, setLogs] = useState([]);
-  const [status, setStatus] = useState("connecting"); // connecting | live | offline
+// The live log console — the original dashboard view, now one tab of two.
+function LogsView({ logs, status, usingSample }) {
   const [paused, setPaused] = useState(false);
   const [filter, setFilter] = useState("ALL");
   const [query, setQuery] = useState("");
-  const [usingSample, setUsingSample] = useState(false);
   const scrollRef = useRef(null);
-  const pausedRef = useRef(paused);
-  pausedRef.current = paused;
-
-  const fetchLogs = useCallback(async () => {
-    if (pausedRef.current) return;
-    try {
-      const res = await fetch(LOGS_ENDPOINT, { headers: { Accept: "application/json" } });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      const entries = Array.isArray(data) ? data : data.logs || [];
-      setLogs(entries.map(normalize));
-      setStatus("live");
-      setUsingSample(false);
-    } catch {
-      // Backend not reachable yet — fall back to sample data once.
-      setStatus("offline");
-      setUsingSample(true);
-      setLogs((prev) => (prev.length ? prev : SAMPLE_LOGS.map(normalize)));
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchLogs();
-    const id = setInterval(fetchLogs, POLL_INTERVAL_MS);
-    return () => clearInterval(id);
-  }, [fetchLogs]);
 
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -115,48 +89,31 @@ export default function App() {
     scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [visible, paused]);
 
-  const robotState = useMemo(() => deriveRobotState(logs, status), [logs, status]);
-
   return (
-    <div className="app">
-      <header className="header">
-        <div className="title">
-          <div className="mascot">
-            <Robot state={robotState} />
-            <span className="mascot__label">{ROBOT_LABELS[robotState]}</span>
-          </div>
-          <div className="title__text">
-            <h1>Agent Dashboard</h1>
-            <span className={`status status--${status}`}>
-              <span className="dot" />
-              {status === "live" ? "Live" : status === "offline" ? "Disconnected" : "Connecting…"}
-            </span>
-          </div>
+    <>
+      <div className="controls">
+        <input
+          className="search"
+          type="text"
+          placeholder="Search logs…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <div className="levels">
+          {LEVELS.map((lvl) => (
+            <button
+              key={lvl}
+              className={`chip ${filter === lvl ? "chip--active" : ""}`}
+              onClick={() => setFilter(lvl)}
+            >
+              {lvl}
+            </button>
+          ))}
         </div>
-        <div className="controls">
-          <input
-            className="search"
-            type="text"
-            placeholder="Search logs…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          <div className="levels">
-            {LEVELS.map((lvl) => (
-              <button
-                key={lvl}
-                className={`chip ${filter === lvl ? "chip--active" : ""}`}
-                onClick={() => setFilter(lvl)}
-              >
-                {lvl}
-              </button>
-            ))}
-          </div>
-          <button className="btn" onClick={() => setPaused((p) => !p)}>
-            {paused ? "Resume" : "Pause"}
-          </button>
-        </div>
-      </header>
+        <button className="btn" onClick={() => setPaused((p) => !p)}>
+          {paused ? "Resume" : "Pause"}
+        </button>
+      </div>
 
       {usingSample && (
         <div className="banner">
@@ -183,6 +140,96 @@ export default function App() {
         <span>{visible.length} line{visible.length === 1 ? "" : "s"}</span>
         <span>Polling every {POLL_INTERVAL_MS / 1000}s{paused ? " (paused)" : ""}</span>
       </footer>
+    </>
+  );
+}
+
+export default function App() {
+  const [logs, setLogs] = useState([]);
+  const [costEvents, setCostEvents] = useState([]);
+  const [status, setStatus] = useState("connecting"); // connecting | live | offline
+  const [usingSample, setUsingSample] = useState(false);
+  const [view, setView] = useState("logs"); // logs | analytics
+  const [collapsed, setCollapsed] = useState(
+    typeof window !== "undefined" && window.innerWidth < COLLAPSE_BREAKPOINT
+  );
+  // Once the user toggles manually, stop auto-collapsing on resize.
+  const userToggledRef = useRef(false);
+
+  const fetchLogs = useCallback(async () => {
+    try {
+      const res = await fetch(LOGS_ENDPOINT, { headers: { Accept: "application/json" } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const entries = Array.isArray(data) ? data : data.logs || [];
+      setLogs(entries.map(normalize));
+      setStatus("live");
+      setUsingSample(false);
+    } catch {
+      // Backend not reachable yet — fall back to sample data once.
+      setStatus("offline");
+      setUsingSample(true);
+      setLogs((prev) => (prev.length ? prev : SAMPLE_LOGS.map(normalize)));
+    }
+  }, []);
+
+  // Durable cost history for the Analytics page. Failure is non-fatal — the
+  // Analytics view falls back to parsing logs when this comes back empty.
+  const fetchCosts = useCallback(async () => {
+    try {
+      const res = await fetch(COSTS_ENDPOINT, { headers: { Accept: "application/json" } });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setCostEvents(Array.isArray(data) ? data : data.events || []);
+    } catch {
+      setCostEvents([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchLogs();
+    fetchCosts();
+    const id = setInterval(() => {
+      fetchLogs();
+      fetchCosts();
+    }, POLL_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, [fetchLogs, fetchCosts]);
+
+  // Collapse/expand the sidebar with the viewport until the user takes over.
+  useEffect(() => {
+    const onResize = () => {
+      if (userToggledRef.current) return;
+      setCollapsed(window.innerWidth < COLLAPSE_BREAKPOINT);
+    };
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+
+  const toggleSidebar = useCallback(() => {
+    userToggledRef.current = true;
+    setCollapsed((c) => !c);
+  }, []);
+
+  const robotState = useMemo(() => deriveRobotState(logs, status), [logs, status]);
+
+  return (
+    <div className={`layout ${collapsed ? "layout--collapsed" : ""}`}>
+      <Sidebar
+        view={view}
+        onNavigate={setView}
+        collapsed={collapsed}
+        onToggle={toggleSidebar}
+        robotState={robotState}
+        status={status}
+      />
+      <div className="content">
+        {view === "logs" ? (
+          <LogsView logs={logs} status={status} usingSample={usingSample} />
+        ) : (
+          <Analytics logs={logs} costEvents={costEvents} now={Date.now()} />
+        )}
+      </div>
     </div>
   );
 }
